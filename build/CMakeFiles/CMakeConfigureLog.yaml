@@ -1,0 +1,2398 @@
+
+---
+events:
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeDetermineSystem.cmake:12 (find_program)"
+      - "CMakeLists.txt:4 (project)"
+    mode: "program"
+    variable: "CMAKE_UNAME"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "uname"
+    candidate_directories:
+      - "/usr/local/bin/"
+      - "/usr/local/sbin/"
+      - "/opt/homebrew/bin/"
+      - "/System/Volumes/Data/Applications/Wine Stable.app/Contents/Resources/wine/bin/"
+      - "/usr/local/Cellar/python@3.11/3.11.8/bin/"
+      - "/Users/zach/.pyenv/shims/"
+      - "/usr/local/opt/ruby/bin/"
+      - "/usr/local/lib/ruby/gems/2.7.0/bin/"
+      - "/usr/local/bin/python3.11/"
+      - "/usr/local/opt/python@2/libexec/bin/"
+      - "/bin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.11/bin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.12/bin/"
+      - "/opt/local/bin/"
+      - "/opt/local/sbin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.10/bin/"
+      - "/usr/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/opt/minicom/2.2/bin/"
+      - "/Users/zach/Library/Python/2.7/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/X11/bin/"
+      - "/usr/local/CrossPack-AVR/bin/"
+      - "/Library/Apple/usr/bin/"
+      - "/Applications/Wireshark.app/Contents/MacOS/"
+      - "/Applications/Little Snitch.app/Contents/Components/"
+      - "/Applications/VMware Fusion.app/Contents/Public/"
+      - "/usr/local/share/dotnet/"
+      - "/Users/zach/.dotnet/tools/"
+    searched_directories:
+      - "/usr/local/bin/uname"
+      - "/usr/local/sbin/uname"
+      - "/opt/homebrew/bin/uname"
+      - "/System/Volumes/Data/Applications/Wine Stable.app/Contents/Resources/wine/bin/uname"
+      - "/usr/local/Cellar/python@3.11/3.11.8/bin/uname"
+      - "/Users/zach/.pyenv/shims/uname"
+      - "/usr/local/opt/ruby/bin/uname"
+      - "/usr/local/lib/ruby/gems/2.7.0/bin/uname"
+      - "/usr/local/bin/python3.11/uname"
+      - "/usr/local/opt/python@2/libexec/bin/uname"
+      - "/bin/uname"
+      - "/Library/Frameworks/Python.framework/Versions/3.11/bin/uname"
+      - "/Library/Frameworks/Python.framework/Versions/3.12/bin/uname"
+      - "/opt/local/bin/uname"
+      - "/opt/local/sbin/uname"
+      - "/Library/Frameworks/Python.framework/Versions/3.10/bin/uname"
+    found: "/usr/bin/uname"
+    search_context:
+      ENV{PATH}:
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/opt/homebrew/bin"
+        - "/System/Volumes/Data/Applications/Wine Stable.app/Contents/Resources/wine/bin"
+        - "/usr/local/bin"
+        - "/usr/local/Cellar/python@3.11/3.11.8/bin"
+        - "/Users/Zach/.pyenv/shims"
+        - "/usr/local/sbin"
+        - "/usr/local/opt/ruby/bin"
+        - "/usr/local/lib/ruby/gems/2.7.0/bin"
+        - "/usr/local/Cellar/python@3.11/3.11.8/bin"
+        - "/usr/local/bin/python3.11"
+        - "/usr/local/opt/python@2/libexec/bin"
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/bin"
+        - "/Library/Frameworks/Python.framework/Versions/3.11/bin"
+        - "/Library/Frameworks/Python.framework/Versions/3.12/bin"
+        - "/opt/local/bin"
+        - "/opt/local/sbin"
+        - "/Library/Frameworks/Python.framework/Versions/3.10/bin"
+        - "/usr/local/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/opt/minicom/2.2/bin"
+        - "/Users/Zach/Library/Python/2.7/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/X11/bin"
+        - "/usr/local/CrossPack-AVR/bin"
+        - "/Library/Apple/usr/bin"
+        - "/Applications/Wireshark.app/Contents/MacOS"
+        - "/Applications/Little Snitch.app/Contents/Components"
+        - "/Applications/VMware Fusion.app/Contents/Public"
+        - "/usr/local/share/dotnet"
+        - "~/.dotnet/tools"
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeDetermineSystem.cmake:212 (message)"
+      - "CMakeLists.txt:4 (project)"
+    message: |
+      The system is: Darwin - 23.6.0 - x86_64
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeUnixFindMake.cmake:5 (find_program)"
+      - "CMakeLists.txt:4 (project)"
+    mode: "program"
+    variable: "CMAKE_MAKE_PROGRAM"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "gmake"
+      - "make"
+      - "smake"
+    candidate_directories:
+      - "/usr/local/bin/"
+      - "/usr/local/sbin/"
+      - "/opt/homebrew/bin/"
+      - "/System/Volumes/Data/Applications/Wine Stable.app/Contents/Resources/wine/bin/"
+      - "/usr/local/Cellar/python@3.11/3.11.8/bin/"
+      - "/Users/zach/.pyenv/shims/"
+      - "/usr/local/opt/ruby/bin/"
+      - "/usr/local/lib/ruby/gems/2.7.0/bin/"
+      - "/usr/local/bin/python3.11/"
+      - "/usr/local/opt/python@2/libexec/bin/"
+      - "/bin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.11/bin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.12/bin/"
+      - "/opt/local/bin/"
+      - "/opt/local/sbin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.10/bin/"
+      - "/usr/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/opt/minicom/2.2/bin/"
+      - "/Users/zach/Library/Python/2.7/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/X11/bin/"
+      - "/usr/local/CrossPack-AVR/bin/"
+      - "/Library/Apple/usr/bin/"
+      - "/Applications/Wireshark.app/Contents/MacOS/"
+      - "/Applications/Little Snitch.app/Contents/Components/"
+      - "/Applications/VMware Fusion.app/Contents/Public/"
+      - "/usr/local/share/dotnet/"
+      - "/Users/zach/.dotnet/tools/"
+    searched_directories:
+      - "/usr/local/bin/gmake"
+      - "/usr/local/sbin/gmake"
+      - "/opt/homebrew/bin/gmake"
+      - "/System/Volumes/Data/Applications/Wine Stable.app/Contents/Resources/wine/bin/gmake"
+      - "/usr/local/Cellar/python@3.11/3.11.8/bin/gmake"
+      - "/Users/zach/.pyenv/shims/gmake"
+      - "/usr/local/opt/ruby/bin/gmake"
+      - "/usr/local/lib/ruby/gems/2.7.0/bin/gmake"
+      - "/usr/local/bin/python3.11/gmake"
+      - "/usr/local/opt/python@2/libexec/bin/gmake"
+      - "/bin/gmake"
+      - "/Library/Frameworks/Python.framework/Versions/3.11/bin/gmake"
+      - "/Library/Frameworks/Python.framework/Versions/3.12/bin/gmake"
+      - "/opt/local/bin/gmake"
+      - "/opt/local/sbin/gmake"
+      - "/Library/Frameworks/Python.framework/Versions/3.10/bin/gmake"
+      - "/usr/bin/gmake"
+      - "/usr/sbin/gmake"
+      - "/sbin/gmake"
+      - "/opt/minicom/2.2/bin/gmake"
+      - "/Users/zach/Library/Python/2.7/bin/gmake"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/gmake"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/gmake"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/gmake"
+      - "/opt/X11/bin/gmake"
+      - "/usr/local/CrossPack-AVR/bin/gmake"
+      - "/Library/Apple/usr/bin/gmake"
+      - "/Applications/Wireshark.app/Contents/MacOS/gmake"
+      - "/Applications/Little Snitch.app/Contents/Components/gmake"
+      - "/Applications/VMware Fusion.app/Contents/Public/gmake"
+      - "/usr/local/share/dotnet/gmake"
+      - "/Users/zach/.dotnet/tools/gmake"
+      - "/usr/local/bin/make"
+      - "/usr/local/sbin/make"
+      - "/opt/homebrew/bin/make"
+      - "/System/Volumes/Data/Applications/Wine Stable.app/Contents/Resources/wine/bin/make"
+      - "/usr/local/Cellar/python@3.11/3.11.8/bin/make"
+      - "/Users/zach/.pyenv/shims/make"
+      - "/usr/local/opt/ruby/bin/make"
+      - "/usr/local/lib/ruby/gems/2.7.0/bin/make"
+      - "/usr/local/bin/python3.11/make"
+      - "/usr/local/opt/python@2/libexec/bin/make"
+      - "/bin/make"
+      - "/Library/Frameworks/Python.framework/Versions/3.11/bin/make"
+      - "/Library/Frameworks/Python.framework/Versions/3.12/bin/make"
+      - "/opt/local/bin/make"
+      - "/opt/local/sbin/make"
+      - "/Library/Frameworks/Python.framework/Versions/3.10/bin/make"
+    found: "/usr/bin/make"
+    search_context:
+      ENV{PATH}:
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/opt/homebrew/bin"
+        - "/System/Volumes/Data/Applications/Wine Stable.app/Contents/Resources/wine/bin"
+        - "/usr/local/bin"
+        - "/usr/local/Cellar/python@3.11/3.11.8/bin"
+        - "/Users/Zach/.pyenv/shims"
+        - "/usr/local/sbin"
+        - "/usr/local/opt/ruby/bin"
+        - "/usr/local/lib/ruby/gems/2.7.0/bin"
+        - "/usr/local/Cellar/python@3.11/3.11.8/bin"
+        - "/usr/local/bin/python3.11"
+        - "/usr/local/opt/python@2/libexec/bin"
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/bin"
+        - "/Library/Frameworks/Python.framework/Versions/3.11/bin"
+        - "/Library/Frameworks/Python.framework/Versions/3.12/bin"
+        - "/opt/local/bin"
+        - "/opt/local/sbin"
+        - "/Library/Frameworks/Python.framework/Versions/3.10/bin"
+        - "/usr/local/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/opt/minicom/2.2/bin"
+        - "/Users/Zach/Library/Python/2.7/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/X11/bin"
+        - "/usr/local/CrossPack-AVR/bin"
+        - "/Library/Apple/usr/bin"
+        - "/Applications/Wireshark.app/Contents/MacOS"
+        - "/Applications/Little Snitch.app/Contents/Components"
+        - "/Applications/VMware Fusion.app/Contents/Public"
+        - "/usr/local/share/dotnet"
+        - "~/.dotnet/tools"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompiler.cmake:73 (find_program)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCCompiler.cmake:64 (_cmake_find_compiler)"
+      - "CMakeLists.txt:4 (project)"
+    mode: "program"
+    variable: "CMAKE_C_COMPILER"
+    description: "C compiler"
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "cc"
+      - "gcc"
+      - "cl"
+      - "bcc"
+      - "xlc"
+      - "icx"
+      - "clang"
+    candidate_directories:
+      - "/usr/local/bin/"
+      - "/usr/local/sbin/"
+      - "/opt/homebrew/bin/"
+      - "/System/Volumes/Data/Applications/Wine Stable.app/Contents/Resources/wine/bin/"
+      - "/usr/local/Cellar/python@3.11/3.11.8/bin/"
+      - "/Users/zach/.pyenv/shims/"
+      - "/usr/local/opt/ruby/bin/"
+      - "/usr/local/lib/ruby/gems/2.7.0/bin/"
+      - "/usr/local/bin/python3.11/"
+      - "/usr/local/opt/python@2/libexec/bin/"
+      - "/bin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.11/bin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.12/bin/"
+      - "/opt/local/bin/"
+      - "/opt/local/sbin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.10/bin/"
+      - "/usr/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/opt/minicom/2.2/bin/"
+      - "/Users/zach/Library/Python/2.7/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/X11/bin/"
+      - "/usr/local/CrossPack-AVR/bin/"
+      - "/Library/Apple/usr/bin/"
+      - "/Applications/Wireshark.app/Contents/MacOS/"
+      - "/Applications/Little Snitch.app/Contents/Components/"
+      - "/Applications/VMware Fusion.app/Contents/Public/"
+      - "/usr/local/share/dotnet/"
+      - "/Users/zach/.dotnet/tools/"
+    searched_directories:
+      - "/usr/local/bin/cc"
+      - "/usr/local/sbin/cc"
+      - "/opt/homebrew/bin/cc"
+      - "/System/Volumes/Data/Applications/Wine Stable.app/Contents/Resources/wine/bin/cc"
+      - "/usr/local/Cellar/python@3.11/3.11.8/bin/cc"
+      - "/Users/zach/.pyenv/shims/cc"
+      - "/usr/local/opt/ruby/bin/cc"
+      - "/usr/local/lib/ruby/gems/2.7.0/bin/cc"
+      - "/usr/local/bin/python3.11/cc"
+      - "/usr/local/opt/python@2/libexec/bin/cc"
+      - "/bin/cc"
+      - "/Library/Frameworks/Python.framework/Versions/3.11/bin/cc"
+      - "/Library/Frameworks/Python.framework/Versions/3.12/bin/cc"
+      - "/opt/local/bin/cc"
+      - "/opt/local/sbin/cc"
+      - "/Library/Frameworks/Python.framework/Versions/3.10/bin/cc"
+    found: "/usr/bin/cc"
+    search_context:
+      ENV{PATH}:
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/opt/homebrew/bin"
+        - "/System/Volumes/Data/Applications/Wine Stable.app/Contents/Resources/wine/bin"
+        - "/usr/local/bin"
+        - "/usr/local/Cellar/python@3.11/3.11.8/bin"
+        - "/Users/Zach/.pyenv/shims"
+        - "/usr/local/sbin"
+        - "/usr/local/opt/ruby/bin"
+        - "/usr/local/lib/ruby/gems/2.7.0/bin"
+        - "/usr/local/Cellar/python@3.11/3.11.8/bin"
+        - "/usr/local/bin/python3.11"
+        - "/usr/local/opt/python@2/libexec/bin"
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/bin"
+        - "/Library/Frameworks/Python.framework/Versions/3.11/bin"
+        - "/Library/Frameworks/Python.framework/Versions/3.12/bin"
+        - "/opt/local/bin"
+        - "/opt/local/sbin"
+        - "/Library/Frameworks/Python.framework/Versions/3.10/bin"
+        - "/usr/local/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/opt/minicom/2.2/bin"
+        - "/Users/Zach/Library/Python/2.7/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/X11/bin"
+        - "/usr/local/CrossPack-AVR/bin"
+        - "/Library/Apple/usr/bin"
+        - "/Applications/Wireshark.app/Contents/MacOS"
+        - "/Applications/Little Snitch.app/Contents/Components"
+        - "/Applications/VMware Fusion.app/Contents/Public"
+        - "/usr/local/share/dotnet"
+        - "~/.dotnet/tools"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerId.cmake:462 (find_file)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerId.cmake:500 (CMAKE_DETERMINE_COMPILER_ID_WRITE)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerId.cmake:8 (CMAKE_DETERMINE_COMPILER_ID_BUILD)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCCompiler.cmake:122 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:4 (project)"
+    mode: "file"
+    variable: "src_in"
+    description: "Path to a file."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "CMakeCCompilerId.c.in"
+    candidate_directories:
+      - "/usr/local/share/cmake/Modules/"
+    found: "/usr/local/share/cmake/Modules/CMakeCCompilerId.c.in"
+    search_context:
+      ENV{PATH}:
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/opt/homebrew/bin"
+        - "/System/Volumes/Data/Applications/Wine Stable.app/Contents/Resources/wine/bin"
+        - "/usr/local/bin"
+        - "/usr/local/Cellar/python@3.11/3.11.8/bin"
+        - "/Users/Zach/.pyenv/shims"
+        - "/usr/local/sbin"
+        - "/usr/local/opt/ruby/bin"
+        - "/usr/local/lib/ruby/gems/2.7.0/bin"
+        - "/usr/local/Cellar/python@3.11/3.11.8/bin"
+        - "/usr/local/bin/python3.11"
+        - "/usr/local/opt/python@2/libexec/bin"
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/bin"
+        - "/Library/Frameworks/Python.framework/Versions/3.11/bin"
+        - "/Library/Frameworks/Python.framework/Versions/3.12/bin"
+        - "/opt/local/bin"
+        - "/opt/local/sbin"
+        - "/Library/Frameworks/Python.framework/Versions/3.10/bin"
+        - "/usr/local/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/opt/minicom/2.2/bin"
+        - "/Users/Zach/Library/Python/2.7/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/X11/bin"
+        - "/usr/local/CrossPack-AVR/bin"
+        - "/Library/Apple/usr/bin"
+        - "/Applications/Wireshark.app/Contents/MacOS"
+        - "/Applications/Little Snitch.app/Contents/Components"
+        - "/Applications/VMware Fusion.app/Contents/Public"
+        - "/usr/local/share/dotnet"
+        - "~/.dotnet/tools"
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCCompiler.cmake:122 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:4 (project)"
+    message: |
+      Compiling the C compiler identification source file "CMakeCCompilerId.c" succeeded.
+      Compiler: /usr/bin/cc 
+      Build flags: 
+      Id flags:  
+      
+      The output was:
+      0
+      
+      
+      Compilation of the C compiler identification source "CMakeCCompilerId.c" produced "a.out"
+      
+      The C compiler identification is AppleClang, found in:
+        /Users/zach/gitr/Advisor-II-BLE-Receiver/build/CMakeFiles/4.2.1/CompilerIdC/a.out
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerId.cmake:290 (message)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCCompiler.cmake:122 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:4 (project)"
+    message: |
+      Detecting C compiler apple sysroot: "/usr/bin/cc" "-E" "apple-sdk.c"
+        # 1 "apple-sdk.c"
+        # 1 "<built-in>" 1
+        # 1 "<built-in>" 3
+        # 394 "<built-in>" 3
+        # 1 "<command line>" 1
+        # 1 "<built-in>" 2
+        # 1 "apple-sdk.c" 2
+        # 1 "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/AvailabilityMacros.h" 1 3 4
+        # 89 "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/AvailabilityMacros.h" 3 4
+        # 1 "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/AvailabilityVersions.h" 1 3 4
+        # 90 "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/AvailabilityMacros.h" 2 3 4
+        # 1 "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/TargetConditionals.h" 1 3 4
+        # 91 "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/AvailabilityMacros.h" 2 3 4
+        # 207 "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/AvailabilityMacros.h" 3 4
+        # 1 "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/Availability.h" 1 3 4
+        # 177 "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/Availability.h" 3 4
+        # 1 "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/AvailabilityInternal.h" 1 3 4
+        # 178 "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/Availability.h" 2 3 4
+        # 1 "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/AvailabilityInternalLegacy.h" 1 3 4
+        # 179 "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/Availability.h" 2 3 4
+        # 208 "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/AvailabilityMacros.h" 2 3 4
+        # 2 "apple-sdk.c" 2
+        
+        
+      Found apple sysroot: /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt:4 (project)"
+    mode: "program"
+    variable: "CMAKE_AR"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "ar"
+    candidate_directories:
+      - "/usr/bin/"
+      - "/usr/local/bin/"
+      - "/usr/local/sbin/"
+      - "/opt/homebrew/bin/"
+      - "/System/Volumes/Data/Applications/Wine Stable.app/Contents/Resources/wine/bin/"
+      - "/usr/local/Cellar/python@3.11/3.11.8/bin/"
+      - "/Users/zach/.pyenv/shims/"
+      - "/usr/local/opt/ruby/bin/"
+      - "/usr/local/lib/ruby/gems/2.7.0/bin/"
+      - "/usr/local/bin/python3.11/"
+      - "/usr/local/opt/python@2/libexec/bin/"
+      - "/bin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.11/bin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.12/bin/"
+      - "/opt/local/bin/"
+      - "/opt/local/sbin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.10/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/opt/minicom/2.2/bin/"
+      - "/Users/zach/Library/Python/2.7/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/X11/bin/"
+      - "/usr/local/CrossPack-AVR/bin/"
+      - "/Library/Apple/usr/bin/"
+      - "/Applications/Wireshark.app/Contents/MacOS/"
+      - "/Applications/Little Snitch.app/Contents/Components/"
+      - "/Applications/VMware Fusion.app/Contents/Public/"
+      - "/usr/local/share/dotnet/"
+      - "/Users/zach/.dotnet/tools/"
+    found: "/usr/bin/ar"
+    search_context:
+      ENV{PATH}:
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/opt/homebrew/bin"
+        - "/System/Volumes/Data/Applications/Wine Stable.app/Contents/Resources/wine/bin"
+        - "/usr/local/bin"
+        - "/usr/local/Cellar/python@3.11/3.11.8/bin"
+        - "/Users/Zach/.pyenv/shims"
+        - "/usr/local/sbin"
+        - "/usr/local/opt/ruby/bin"
+        - "/usr/local/lib/ruby/gems/2.7.0/bin"
+        - "/usr/local/Cellar/python@3.11/3.11.8/bin"
+        - "/usr/local/bin/python3.11"
+        - "/usr/local/opt/python@2/libexec/bin"
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/bin"
+        - "/Library/Frameworks/Python.framework/Versions/3.11/bin"
+        - "/Library/Frameworks/Python.framework/Versions/3.12/bin"
+        - "/opt/local/bin"
+        - "/opt/local/sbin"
+        - "/Library/Frameworks/Python.framework/Versions/3.10/bin"
+        - "/usr/local/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/opt/minicom/2.2/bin"
+        - "/Users/Zach/Library/Python/2.7/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/X11/bin"
+        - "/usr/local/CrossPack-AVR/bin"
+        - "/Library/Apple/usr/bin"
+        - "/Applications/Wireshark.app/Contents/MacOS"
+        - "/Applications/Little Snitch.app/Contents/Components"
+        - "/Applications/VMware Fusion.app/Contents/Public"
+        - "/usr/local/share/dotnet"
+        - "~/.dotnet/tools"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt:4 (project)"
+    mode: "program"
+    variable: "CMAKE_RANLIB"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "ranlib"
+    candidate_directories:
+      - "/usr/bin/"
+      - "/usr/local/bin/"
+      - "/usr/local/sbin/"
+      - "/opt/homebrew/bin/"
+      - "/System/Volumes/Data/Applications/Wine Stable.app/Contents/Resources/wine/bin/"
+      - "/usr/local/Cellar/python@3.11/3.11.8/bin/"
+      - "/Users/zach/.pyenv/shims/"
+      - "/usr/local/opt/ruby/bin/"
+      - "/usr/local/lib/ruby/gems/2.7.0/bin/"
+      - "/usr/local/bin/python3.11/"
+      - "/usr/local/opt/python@2/libexec/bin/"
+      - "/bin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.11/bin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.12/bin/"
+      - "/opt/local/bin/"
+      - "/opt/local/sbin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.10/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/opt/minicom/2.2/bin/"
+      - "/Users/zach/Library/Python/2.7/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/X11/bin/"
+      - "/usr/local/CrossPack-AVR/bin/"
+      - "/Library/Apple/usr/bin/"
+      - "/Applications/Wireshark.app/Contents/MacOS/"
+      - "/Applications/Little Snitch.app/Contents/Components/"
+      - "/Applications/VMware Fusion.app/Contents/Public/"
+      - "/usr/local/share/dotnet/"
+      - "/Users/zach/.dotnet/tools/"
+    found: "/usr/bin/ranlib"
+    search_context:
+      ENV{PATH}:
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/opt/homebrew/bin"
+        - "/System/Volumes/Data/Applications/Wine Stable.app/Contents/Resources/wine/bin"
+        - "/usr/local/bin"
+        - "/usr/local/Cellar/python@3.11/3.11.8/bin"
+        - "/Users/Zach/.pyenv/shims"
+        - "/usr/local/sbin"
+        - "/usr/local/opt/ruby/bin"
+        - "/usr/local/lib/ruby/gems/2.7.0/bin"
+        - "/usr/local/Cellar/python@3.11/3.11.8/bin"
+        - "/usr/local/bin/python3.11"
+        - "/usr/local/opt/python@2/libexec/bin"
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/bin"
+        - "/Library/Frameworks/Python.framework/Versions/3.11/bin"
+        - "/Library/Frameworks/Python.framework/Versions/3.12/bin"
+        - "/opt/local/bin"
+        - "/opt/local/sbin"
+        - "/Library/Frameworks/Python.framework/Versions/3.10/bin"
+        - "/usr/local/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/opt/minicom/2.2/bin"
+        - "/Users/Zach/Library/Python/2.7/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/X11/bin"
+        - "/usr/local/CrossPack-AVR/bin"
+        - "/Library/Apple/usr/bin"
+        - "/Applications/Wireshark.app/Contents/MacOS"
+        - "/Applications/Little Snitch.app/Contents/Components"
+        - "/Applications/VMware Fusion.app/Contents/Public"
+        - "/usr/local/share/dotnet"
+        - "~/.dotnet/tools"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt:4 (project)"
+    mode: "program"
+    variable: "CMAKE_STRIP"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "strip"
+    candidate_directories:
+      - "/usr/bin/"
+      - "/usr/local/bin/"
+      - "/usr/local/sbin/"
+      - "/opt/homebrew/bin/"
+      - "/System/Volumes/Data/Applications/Wine Stable.app/Contents/Resources/wine/bin/"
+      - "/usr/local/Cellar/python@3.11/3.11.8/bin/"
+      - "/Users/zach/.pyenv/shims/"
+      - "/usr/local/opt/ruby/bin/"
+      - "/usr/local/lib/ruby/gems/2.7.0/bin/"
+      - "/usr/local/bin/python3.11/"
+      - "/usr/local/opt/python@2/libexec/bin/"
+      - "/bin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.11/bin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.12/bin/"
+      - "/opt/local/bin/"
+      - "/opt/local/sbin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.10/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/opt/minicom/2.2/bin/"
+      - "/Users/zach/Library/Python/2.7/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/X11/bin/"
+      - "/usr/local/CrossPack-AVR/bin/"
+      - "/Library/Apple/usr/bin/"
+      - "/Applications/Wireshark.app/Contents/MacOS/"
+      - "/Applications/Little Snitch.app/Contents/Components/"
+      - "/Applications/VMware Fusion.app/Contents/Public/"
+      - "/usr/local/share/dotnet/"
+      - "/Users/zach/.dotnet/tools/"
+    found: "/usr/bin/strip"
+    search_context:
+      ENV{PATH}:
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/opt/homebrew/bin"
+        - "/System/Volumes/Data/Applications/Wine Stable.app/Contents/Resources/wine/bin"
+        - "/usr/local/bin"
+        - "/usr/local/Cellar/python@3.11/3.11.8/bin"
+        - "/Users/Zach/.pyenv/shims"
+        - "/usr/local/sbin"
+        - "/usr/local/opt/ruby/bin"
+        - "/usr/local/lib/ruby/gems/2.7.0/bin"
+        - "/usr/local/Cellar/python@3.11/3.11.8/bin"
+        - "/usr/local/bin/python3.11"
+        - "/usr/local/opt/python@2/libexec/bin"
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/bin"
+        - "/Library/Frameworks/Python.framework/Versions/3.11/bin"
+        - "/Library/Frameworks/Python.framework/Versions/3.12/bin"
+        - "/opt/local/bin"
+        - "/opt/local/sbin"
+        - "/Library/Frameworks/Python.framework/Versions/3.10/bin"
+        - "/usr/local/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/opt/minicom/2.2/bin"
+        - "/Users/Zach/Library/Python/2.7/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/X11/bin"
+        - "/usr/local/CrossPack-AVR/bin"
+        - "/Library/Apple/usr/bin"
+        - "/Applications/Wireshark.app/Contents/MacOS"
+        - "/Applications/Little Snitch.app/Contents/Components"
+        - "/Applications/VMware Fusion.app/Contents/Public"
+        - "/usr/local/share/dotnet"
+        - "~/.dotnet/tools"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt:4 (project)"
+    mode: "program"
+    variable: "CMAKE_LINKER"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "ld"
+    candidate_directories:
+      - "/usr/bin/"
+      - "/usr/local/bin/"
+      - "/usr/local/sbin/"
+      - "/opt/homebrew/bin/"
+      - "/System/Volumes/Data/Applications/Wine Stable.app/Contents/Resources/wine/bin/"
+      - "/usr/local/Cellar/python@3.11/3.11.8/bin/"
+      - "/Users/zach/.pyenv/shims/"
+      - "/usr/local/opt/ruby/bin/"
+      - "/usr/local/lib/ruby/gems/2.7.0/bin/"
+      - "/usr/local/bin/python3.11/"
+      - "/usr/local/opt/python@2/libexec/bin/"
+      - "/bin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.11/bin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.12/bin/"
+      - "/opt/local/bin/"
+      - "/opt/local/sbin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.10/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/opt/minicom/2.2/bin/"
+      - "/Users/zach/Library/Python/2.7/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/X11/bin/"
+      - "/usr/local/CrossPack-AVR/bin/"
+      - "/Library/Apple/usr/bin/"
+      - "/Applications/Wireshark.app/Contents/MacOS/"
+      - "/Applications/Little Snitch.app/Contents/Components/"
+      - "/Applications/VMware Fusion.app/Contents/Public/"
+      - "/usr/local/share/dotnet/"
+      - "/Users/zach/.dotnet/tools/"
+    found: "/usr/bin/ld"
+    search_context:
+      ENV{PATH}:
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/opt/homebrew/bin"
+        - "/System/Volumes/Data/Applications/Wine Stable.app/Contents/Resources/wine/bin"
+        - "/usr/local/bin"
+        - "/usr/local/Cellar/python@3.11/3.11.8/bin"
+        - "/Users/Zach/.pyenv/shims"
+        - "/usr/local/sbin"
+        - "/usr/local/opt/ruby/bin"
+        - "/usr/local/lib/ruby/gems/2.7.0/bin"
+        - "/usr/local/Cellar/python@3.11/3.11.8/bin"
+        - "/usr/local/bin/python3.11"
+        - "/usr/local/opt/python@2/libexec/bin"
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/bin"
+        - "/Library/Frameworks/Python.framework/Versions/3.11/bin"
+        - "/Library/Frameworks/Python.framework/Versions/3.12/bin"
+        - "/opt/local/bin"
+        - "/opt/local/sbin"
+        - "/Library/Frameworks/Python.framework/Versions/3.10/bin"
+        - "/usr/local/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/opt/minicom/2.2/bin"
+        - "/Users/Zach/Library/Python/2.7/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/X11/bin"
+        - "/usr/local/CrossPack-AVR/bin"
+        - "/Library/Apple/usr/bin"
+        - "/Applications/Wireshark.app/Contents/MacOS"
+        - "/Applications/Little Snitch.app/Contents/Components"
+        - "/Applications/VMware Fusion.app/Contents/Public"
+        - "/usr/local/share/dotnet"
+        - "~/.dotnet/tools"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt:4 (project)"
+    mode: "program"
+    variable: "CMAKE_NM"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "nm"
+    candidate_directories:
+      - "/usr/bin/"
+      - "/usr/local/bin/"
+      - "/usr/local/sbin/"
+      - "/opt/homebrew/bin/"
+      - "/System/Volumes/Data/Applications/Wine Stable.app/Contents/Resources/wine/bin/"
+      - "/usr/local/Cellar/python@3.11/3.11.8/bin/"
+      - "/Users/zach/.pyenv/shims/"
+      - "/usr/local/opt/ruby/bin/"
+      - "/usr/local/lib/ruby/gems/2.7.0/bin/"
+      - "/usr/local/bin/python3.11/"
+      - "/usr/local/opt/python@2/libexec/bin/"
+      - "/bin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.11/bin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.12/bin/"
+      - "/opt/local/bin/"
+      - "/opt/local/sbin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.10/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/opt/minicom/2.2/bin/"
+      - "/Users/zach/Library/Python/2.7/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/X11/bin/"
+      - "/usr/local/CrossPack-AVR/bin/"
+      - "/Library/Apple/usr/bin/"
+      - "/Applications/Wireshark.app/Contents/MacOS/"
+      - "/Applications/Little Snitch.app/Contents/Components/"
+      - "/Applications/VMware Fusion.app/Contents/Public/"
+      - "/usr/local/share/dotnet/"
+      - "/Users/zach/.dotnet/tools/"
+    found: "/usr/bin/nm"
+    search_context:
+      ENV{PATH}:
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/opt/homebrew/bin"
+        - "/System/Volumes/Data/Applications/Wine Stable.app/Contents/Resources/wine/bin"
+        - "/usr/local/bin"
+        - "/usr/local/Cellar/python@3.11/3.11.8/bin"
+        - "/Users/Zach/.pyenv/shims"
+        - "/usr/local/sbin"
+        - "/usr/local/opt/ruby/bin"
+        - "/usr/local/lib/ruby/gems/2.7.0/bin"
+        - "/usr/local/Cellar/python@3.11/3.11.8/bin"
+        - "/usr/local/bin/python3.11"
+        - "/usr/local/opt/python@2/libexec/bin"
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/bin"
+        - "/Library/Frameworks/Python.framework/Versions/3.11/bin"
+        - "/Library/Frameworks/Python.framework/Versions/3.12/bin"
+        - "/opt/local/bin"
+        - "/opt/local/sbin"
+        - "/Library/Frameworks/Python.framework/Versions/3.10/bin"
+        - "/usr/local/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/opt/minicom/2.2/bin"
+        - "/Users/Zach/Library/Python/2.7/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/X11/bin"
+        - "/usr/local/CrossPack-AVR/bin"
+        - "/Library/Apple/usr/bin"
+        - "/Applications/Wireshark.app/Contents/MacOS"
+        - "/Applications/Little Snitch.app/Contents/Components"
+        - "/Applications/VMware Fusion.app/Contents/Public"
+        - "/usr/local/share/dotnet"
+        - "~/.dotnet/tools"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt:4 (project)"
+    mode: "program"
+    variable: "CMAKE_OBJDUMP"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "objdump"
+    candidate_directories:
+      - "/usr/bin/"
+      - "/usr/local/bin/"
+      - "/usr/local/sbin/"
+      - "/opt/homebrew/bin/"
+      - "/System/Volumes/Data/Applications/Wine Stable.app/Contents/Resources/wine/bin/"
+      - "/usr/local/Cellar/python@3.11/3.11.8/bin/"
+      - "/Users/zach/.pyenv/shims/"
+      - "/usr/local/opt/ruby/bin/"
+      - "/usr/local/lib/ruby/gems/2.7.0/bin/"
+      - "/usr/local/bin/python3.11/"
+      - "/usr/local/opt/python@2/libexec/bin/"
+      - "/bin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.11/bin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.12/bin/"
+      - "/opt/local/bin/"
+      - "/opt/local/sbin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.10/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/opt/minicom/2.2/bin/"
+      - "/Users/zach/Library/Python/2.7/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/X11/bin/"
+      - "/usr/local/CrossPack-AVR/bin/"
+      - "/Library/Apple/usr/bin/"
+      - "/Applications/Wireshark.app/Contents/MacOS/"
+      - "/Applications/Little Snitch.app/Contents/Components/"
+      - "/Applications/VMware Fusion.app/Contents/Public/"
+      - "/usr/local/share/dotnet/"
+      - "/Users/zach/.dotnet/tools/"
+    found: "/usr/bin/objdump"
+    search_context:
+      ENV{PATH}:
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/opt/homebrew/bin"
+        - "/System/Volumes/Data/Applications/Wine Stable.app/Contents/Resources/wine/bin"
+        - "/usr/local/bin"
+        - "/usr/local/Cellar/python@3.11/3.11.8/bin"
+        - "/Users/Zach/.pyenv/shims"
+        - "/usr/local/sbin"
+        - "/usr/local/opt/ruby/bin"
+        - "/usr/local/lib/ruby/gems/2.7.0/bin"
+        - "/usr/local/Cellar/python@3.11/3.11.8/bin"
+        - "/usr/local/bin/python3.11"
+        - "/usr/local/opt/python@2/libexec/bin"
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/bin"
+        - "/Library/Frameworks/Python.framework/Versions/3.11/bin"
+        - "/Library/Frameworks/Python.framework/Versions/3.12/bin"
+        - "/opt/local/bin"
+        - "/opt/local/sbin"
+        - "/Library/Frameworks/Python.framework/Versions/3.10/bin"
+        - "/usr/local/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/opt/minicom/2.2/bin"
+        - "/Users/Zach/Library/Python/2.7/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/X11/bin"
+        - "/usr/local/CrossPack-AVR/bin"
+        - "/Library/Apple/usr/bin"
+        - "/Applications/Wireshark.app/Contents/MacOS"
+        - "/Applications/Little Snitch.app/Contents/Components"
+        - "/Applications/VMware Fusion.app/Contents/Public"
+        - "/usr/local/share/dotnet"
+        - "~/.dotnet/tools"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt:4 (project)"
+    mode: "program"
+    variable: "CMAKE_OBJCOPY"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "objcopy"
+    candidate_directories:
+      - "/usr/bin/"
+      - "/usr/local/bin/"
+      - "/usr/local/sbin/"
+      - "/opt/homebrew/bin/"
+      - "/System/Volumes/Data/Applications/Wine Stable.app/Contents/Resources/wine/bin/"
+      - "/usr/local/Cellar/python@3.11/3.11.8/bin/"
+      - "/Users/zach/.pyenv/shims/"
+      - "/usr/local/opt/ruby/bin/"
+      - "/usr/local/lib/ruby/gems/2.7.0/bin/"
+      - "/usr/local/bin/python3.11/"
+      - "/usr/local/opt/python@2/libexec/bin/"
+      - "/bin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.11/bin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.12/bin/"
+      - "/opt/local/bin/"
+      - "/opt/local/sbin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.10/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/opt/minicom/2.2/bin/"
+      - "/Users/zach/Library/Python/2.7/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/X11/bin/"
+      - "/usr/local/CrossPack-AVR/bin/"
+      - "/Library/Apple/usr/bin/"
+      - "/Applications/Wireshark.app/Contents/MacOS/"
+      - "/Applications/Little Snitch.app/Contents/Components/"
+      - "/Applications/VMware Fusion.app/Contents/Public/"
+      - "/usr/local/share/dotnet/"
+      - "/Users/zach/.dotnet/tools/"
+    searched_directories:
+      - "/usr/bin/objcopy"
+      - "/usr/local/bin/objcopy"
+      - "/usr/local/sbin/objcopy"
+      - "/opt/homebrew/bin/objcopy"
+      - "/System/Volumes/Data/Applications/Wine Stable.app/Contents/Resources/wine/bin/objcopy"
+      - "/usr/local/Cellar/python@3.11/3.11.8/bin/objcopy"
+      - "/Users/zach/.pyenv/shims/objcopy"
+      - "/usr/local/opt/ruby/bin/objcopy"
+      - "/usr/local/lib/ruby/gems/2.7.0/bin/objcopy"
+      - "/usr/local/bin/python3.11/objcopy"
+      - "/usr/local/opt/python@2/libexec/bin/objcopy"
+      - "/bin/objcopy"
+      - "/Library/Frameworks/Python.framework/Versions/3.11/bin/objcopy"
+      - "/Library/Frameworks/Python.framework/Versions/3.12/bin/objcopy"
+      - "/opt/local/bin/objcopy"
+      - "/opt/local/sbin/objcopy"
+      - "/Library/Frameworks/Python.framework/Versions/3.10/bin/objcopy"
+      - "/usr/sbin/objcopy"
+      - "/sbin/objcopy"
+      - "/opt/minicom/2.2/bin/objcopy"
+      - "/Users/zach/Library/Python/2.7/bin/objcopy"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/objcopy"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/objcopy"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/objcopy"
+      - "/opt/X11/bin/objcopy"
+      - "/usr/local/CrossPack-AVR/bin/objcopy"
+      - "/Library/Apple/usr/bin/objcopy"
+      - "/Applications/Wireshark.app/Contents/MacOS/objcopy"
+      - "/Applications/Little Snitch.app/Contents/Components/objcopy"
+      - "/Applications/VMware Fusion.app/Contents/Public/objcopy"
+      - "/usr/local/share/dotnet/objcopy"
+      - "/Users/zach/.dotnet/tools/objcopy"
+    found: false
+    search_context:
+      ENV{PATH}:
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/opt/homebrew/bin"
+        - "/System/Volumes/Data/Applications/Wine Stable.app/Contents/Resources/wine/bin"
+        - "/usr/local/bin"
+        - "/usr/local/Cellar/python@3.11/3.11.8/bin"
+        - "/Users/Zach/.pyenv/shims"
+        - "/usr/local/sbin"
+        - "/usr/local/opt/ruby/bin"
+        - "/usr/local/lib/ruby/gems/2.7.0/bin"
+        - "/usr/local/Cellar/python@3.11/3.11.8/bin"
+        - "/usr/local/bin/python3.11"
+        - "/usr/local/opt/python@2/libexec/bin"
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/bin"
+        - "/Library/Frameworks/Python.framework/Versions/3.11/bin"
+        - "/Library/Frameworks/Python.framework/Versions/3.12/bin"
+        - "/opt/local/bin"
+        - "/opt/local/sbin"
+        - "/Library/Frameworks/Python.framework/Versions/3.10/bin"
+        - "/usr/local/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/opt/minicom/2.2/bin"
+        - "/Users/Zach/Library/Python/2.7/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/X11/bin"
+        - "/usr/local/CrossPack-AVR/bin"
+        - "/Library/Apple/usr/bin"
+        - "/Applications/Wireshark.app/Contents/MacOS"
+        - "/Applications/Little Snitch.app/Contents/Components"
+        - "/Applications/VMware Fusion.app/Contents/Public"
+        - "/usr/local/share/dotnet"
+        - "~/.dotnet/tools"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt:4 (project)"
+    mode: "program"
+    variable: "CMAKE_READELF"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "readelf"
+    candidate_directories:
+      - "/usr/bin/"
+      - "/usr/local/bin/"
+      - "/usr/local/sbin/"
+      - "/opt/homebrew/bin/"
+      - "/System/Volumes/Data/Applications/Wine Stable.app/Contents/Resources/wine/bin/"
+      - "/usr/local/Cellar/python@3.11/3.11.8/bin/"
+      - "/Users/zach/.pyenv/shims/"
+      - "/usr/local/opt/ruby/bin/"
+      - "/usr/local/lib/ruby/gems/2.7.0/bin/"
+      - "/usr/local/bin/python3.11/"
+      - "/usr/local/opt/python@2/libexec/bin/"
+      - "/bin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.11/bin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.12/bin/"
+      - "/opt/local/bin/"
+      - "/opt/local/sbin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.10/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/opt/minicom/2.2/bin/"
+      - "/Users/zach/Library/Python/2.7/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/X11/bin/"
+      - "/usr/local/CrossPack-AVR/bin/"
+      - "/Library/Apple/usr/bin/"
+      - "/Applications/Wireshark.app/Contents/MacOS/"
+      - "/Applications/Little Snitch.app/Contents/Components/"
+      - "/Applications/VMware Fusion.app/Contents/Public/"
+      - "/usr/local/share/dotnet/"
+      - "/Users/zach/.dotnet/tools/"
+    searched_directories:
+      - "/usr/bin/readelf"
+      - "/usr/local/bin/readelf"
+      - "/usr/local/sbin/readelf"
+      - "/opt/homebrew/bin/readelf"
+      - "/System/Volumes/Data/Applications/Wine Stable.app/Contents/Resources/wine/bin/readelf"
+      - "/usr/local/Cellar/python@3.11/3.11.8/bin/readelf"
+      - "/Users/zach/.pyenv/shims/readelf"
+      - "/usr/local/opt/ruby/bin/readelf"
+      - "/usr/local/lib/ruby/gems/2.7.0/bin/readelf"
+      - "/usr/local/bin/python3.11/readelf"
+      - "/usr/local/opt/python@2/libexec/bin/readelf"
+      - "/bin/readelf"
+      - "/Library/Frameworks/Python.framework/Versions/3.11/bin/readelf"
+      - "/Library/Frameworks/Python.framework/Versions/3.12/bin/readelf"
+      - "/opt/local/bin/readelf"
+      - "/opt/local/sbin/readelf"
+      - "/Library/Frameworks/Python.framework/Versions/3.10/bin/readelf"
+      - "/usr/sbin/readelf"
+      - "/sbin/readelf"
+      - "/opt/minicom/2.2/bin/readelf"
+      - "/Users/zach/Library/Python/2.7/bin/readelf"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/readelf"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/readelf"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/readelf"
+      - "/opt/X11/bin/readelf"
+      - "/usr/local/CrossPack-AVR/bin/readelf"
+      - "/Library/Apple/usr/bin/readelf"
+      - "/Applications/Wireshark.app/Contents/MacOS/readelf"
+      - "/Applications/Little Snitch.app/Contents/Components/readelf"
+      - "/Applications/VMware Fusion.app/Contents/Public/readelf"
+      - "/usr/local/share/dotnet/readelf"
+      - "/Users/zach/.dotnet/tools/readelf"
+    found: false
+    search_context:
+      ENV{PATH}:
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/opt/homebrew/bin"
+        - "/System/Volumes/Data/Applications/Wine Stable.app/Contents/Resources/wine/bin"
+        - "/usr/local/bin"
+        - "/usr/local/Cellar/python@3.11/3.11.8/bin"
+        - "/Users/Zach/.pyenv/shims"
+        - "/usr/local/sbin"
+        - "/usr/local/opt/ruby/bin"
+        - "/usr/local/lib/ruby/gems/2.7.0/bin"
+        - "/usr/local/Cellar/python@3.11/3.11.8/bin"
+        - "/usr/local/bin/python3.11"
+        - "/usr/local/opt/python@2/libexec/bin"
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/bin"
+        - "/Library/Frameworks/Python.framework/Versions/3.11/bin"
+        - "/Library/Frameworks/Python.framework/Versions/3.12/bin"
+        - "/opt/local/bin"
+        - "/opt/local/sbin"
+        - "/Library/Frameworks/Python.framework/Versions/3.10/bin"
+        - "/usr/local/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/opt/minicom/2.2/bin"
+        - "/Users/Zach/Library/Python/2.7/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/X11/bin"
+        - "/usr/local/CrossPack-AVR/bin"
+        - "/Library/Apple/usr/bin"
+        - "/Applications/Wireshark.app/Contents/MacOS"
+        - "/Applications/Little Snitch.app/Contents/Components"
+        - "/Applications/VMware Fusion.app/Contents/Public"
+        - "/usr/local/share/dotnet"
+        - "~/.dotnet/tools"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt:4 (project)"
+    mode: "program"
+    variable: "CMAKE_DLLTOOL"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "dlltool"
+    candidate_directories:
+      - "/usr/bin/"
+      - "/usr/local/bin/"
+      - "/usr/local/sbin/"
+      - "/opt/homebrew/bin/"
+      - "/System/Volumes/Data/Applications/Wine Stable.app/Contents/Resources/wine/bin/"
+      - "/usr/local/Cellar/python@3.11/3.11.8/bin/"
+      - "/Users/zach/.pyenv/shims/"
+      - "/usr/local/opt/ruby/bin/"
+      - "/usr/local/lib/ruby/gems/2.7.0/bin/"
+      - "/usr/local/bin/python3.11/"
+      - "/usr/local/opt/python@2/libexec/bin/"
+      - "/bin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.11/bin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.12/bin/"
+      - "/opt/local/bin/"
+      - "/opt/local/sbin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.10/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/opt/minicom/2.2/bin/"
+      - "/Users/zach/Library/Python/2.7/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/X11/bin/"
+      - "/usr/local/CrossPack-AVR/bin/"
+      - "/Library/Apple/usr/bin/"
+      - "/Applications/Wireshark.app/Contents/MacOS/"
+      - "/Applications/Little Snitch.app/Contents/Components/"
+      - "/Applications/VMware Fusion.app/Contents/Public/"
+      - "/usr/local/share/dotnet/"
+      - "/Users/zach/.dotnet/tools/"
+    searched_directories:
+      - "/usr/bin/dlltool"
+      - "/usr/local/bin/dlltool"
+      - "/usr/local/sbin/dlltool"
+      - "/opt/homebrew/bin/dlltool"
+      - "/System/Volumes/Data/Applications/Wine Stable.app/Contents/Resources/wine/bin/dlltool"
+      - "/usr/local/Cellar/python@3.11/3.11.8/bin/dlltool"
+      - "/Users/zach/.pyenv/shims/dlltool"
+      - "/usr/local/opt/ruby/bin/dlltool"
+      - "/usr/local/lib/ruby/gems/2.7.0/bin/dlltool"
+      - "/usr/local/bin/python3.11/dlltool"
+      - "/usr/local/opt/python@2/libexec/bin/dlltool"
+      - "/bin/dlltool"
+      - "/Library/Frameworks/Python.framework/Versions/3.11/bin/dlltool"
+      - "/Library/Frameworks/Python.framework/Versions/3.12/bin/dlltool"
+      - "/opt/local/bin/dlltool"
+      - "/opt/local/sbin/dlltool"
+      - "/Library/Frameworks/Python.framework/Versions/3.10/bin/dlltool"
+      - "/usr/sbin/dlltool"
+      - "/sbin/dlltool"
+      - "/opt/minicom/2.2/bin/dlltool"
+      - "/Users/zach/Library/Python/2.7/bin/dlltool"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/dlltool"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/dlltool"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/dlltool"
+      - "/opt/X11/bin/dlltool"
+      - "/usr/local/CrossPack-AVR/bin/dlltool"
+      - "/Library/Apple/usr/bin/dlltool"
+      - "/Applications/Wireshark.app/Contents/MacOS/dlltool"
+      - "/Applications/Little Snitch.app/Contents/Components/dlltool"
+      - "/Applications/VMware Fusion.app/Contents/Public/dlltool"
+      - "/usr/local/share/dotnet/dlltool"
+      - "/Users/zach/.dotnet/tools/dlltool"
+    found: false
+    search_context:
+      ENV{PATH}:
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/opt/homebrew/bin"
+        - "/System/Volumes/Data/Applications/Wine Stable.app/Contents/Resources/wine/bin"
+        - "/usr/local/bin"
+        - "/usr/local/Cellar/python@3.11/3.11.8/bin"
+        - "/Users/Zach/.pyenv/shims"
+        - "/usr/local/sbin"
+        - "/usr/local/opt/ruby/bin"
+        - "/usr/local/lib/ruby/gems/2.7.0/bin"
+        - "/usr/local/Cellar/python@3.11/3.11.8/bin"
+        - "/usr/local/bin/python3.11"
+        - "/usr/local/opt/python@2/libexec/bin"
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/bin"
+        - "/Library/Frameworks/Python.framework/Versions/3.11/bin"
+        - "/Library/Frameworks/Python.framework/Versions/3.12/bin"
+        - "/opt/local/bin"
+        - "/opt/local/sbin"
+        - "/Library/Frameworks/Python.framework/Versions/3.10/bin"
+        - "/usr/local/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/opt/minicom/2.2/bin"
+        - "/Users/Zach/Library/Python/2.7/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/X11/bin"
+        - "/usr/local/CrossPack-AVR/bin"
+        - "/Library/Apple/usr/bin"
+        - "/Applications/Wireshark.app/Contents/MacOS"
+        - "/Applications/Little Snitch.app/Contents/Components"
+        - "/Applications/VMware Fusion.app/Contents/Public"
+        - "/usr/local/share/dotnet"
+        - "~/.dotnet/tools"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt:4 (project)"
+    mode: "program"
+    variable: "CMAKE_ADDR2LINE"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "addr2line"
+    candidate_directories:
+      - "/usr/bin/"
+      - "/usr/local/bin/"
+      - "/usr/local/sbin/"
+      - "/opt/homebrew/bin/"
+      - "/System/Volumes/Data/Applications/Wine Stable.app/Contents/Resources/wine/bin/"
+      - "/usr/local/Cellar/python@3.11/3.11.8/bin/"
+      - "/Users/zach/.pyenv/shims/"
+      - "/usr/local/opt/ruby/bin/"
+      - "/usr/local/lib/ruby/gems/2.7.0/bin/"
+      - "/usr/local/bin/python3.11/"
+      - "/usr/local/opt/python@2/libexec/bin/"
+      - "/bin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.11/bin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.12/bin/"
+      - "/opt/local/bin/"
+      - "/opt/local/sbin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.10/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/opt/minicom/2.2/bin/"
+      - "/Users/zach/Library/Python/2.7/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/X11/bin/"
+      - "/usr/local/CrossPack-AVR/bin/"
+      - "/Library/Apple/usr/bin/"
+      - "/Applications/Wireshark.app/Contents/MacOS/"
+      - "/Applications/Little Snitch.app/Contents/Components/"
+      - "/Applications/VMware Fusion.app/Contents/Public/"
+      - "/usr/local/share/dotnet/"
+      - "/Users/zach/.dotnet/tools/"
+    searched_directories:
+      - "/usr/bin/addr2line"
+      - "/usr/local/bin/addr2line"
+      - "/usr/local/sbin/addr2line"
+      - "/opt/homebrew/bin/addr2line"
+      - "/System/Volumes/Data/Applications/Wine Stable.app/Contents/Resources/wine/bin/addr2line"
+      - "/usr/local/Cellar/python@3.11/3.11.8/bin/addr2line"
+      - "/Users/zach/.pyenv/shims/addr2line"
+      - "/usr/local/opt/ruby/bin/addr2line"
+      - "/usr/local/lib/ruby/gems/2.7.0/bin/addr2line"
+      - "/usr/local/bin/python3.11/addr2line"
+      - "/usr/local/opt/python@2/libexec/bin/addr2line"
+      - "/bin/addr2line"
+      - "/Library/Frameworks/Python.framework/Versions/3.11/bin/addr2line"
+      - "/Library/Frameworks/Python.framework/Versions/3.12/bin/addr2line"
+      - "/opt/local/bin/addr2line"
+      - "/opt/local/sbin/addr2line"
+      - "/Library/Frameworks/Python.framework/Versions/3.10/bin/addr2line"
+      - "/usr/sbin/addr2line"
+      - "/sbin/addr2line"
+      - "/opt/minicom/2.2/bin/addr2line"
+      - "/Users/zach/Library/Python/2.7/bin/addr2line"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/addr2line"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/addr2line"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/addr2line"
+      - "/opt/X11/bin/addr2line"
+      - "/usr/local/CrossPack-AVR/bin/addr2line"
+      - "/Library/Apple/usr/bin/addr2line"
+      - "/Applications/Wireshark.app/Contents/MacOS/addr2line"
+      - "/Applications/Little Snitch.app/Contents/Components/addr2line"
+      - "/Applications/VMware Fusion.app/Contents/Public/addr2line"
+      - "/usr/local/share/dotnet/addr2line"
+      - "/Users/zach/.dotnet/tools/addr2line"
+    found: false
+    search_context:
+      ENV{PATH}:
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/opt/homebrew/bin"
+        - "/System/Volumes/Data/Applications/Wine Stable.app/Contents/Resources/wine/bin"
+        - "/usr/local/bin"
+        - "/usr/local/Cellar/python@3.11/3.11.8/bin"
+        - "/Users/Zach/.pyenv/shims"
+        - "/usr/local/sbin"
+        - "/usr/local/opt/ruby/bin"
+        - "/usr/local/lib/ruby/gems/2.7.0/bin"
+        - "/usr/local/Cellar/python@3.11/3.11.8/bin"
+        - "/usr/local/bin/python3.11"
+        - "/usr/local/opt/python@2/libexec/bin"
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/bin"
+        - "/Library/Frameworks/Python.framework/Versions/3.11/bin"
+        - "/Library/Frameworks/Python.framework/Versions/3.12/bin"
+        - "/opt/local/bin"
+        - "/opt/local/sbin"
+        - "/Library/Frameworks/Python.framework/Versions/3.10/bin"
+        - "/usr/local/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/opt/minicom/2.2/bin"
+        - "/Users/Zach/Library/Python/2.7/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/X11/bin"
+        - "/usr/local/CrossPack-AVR/bin"
+        - "/Library/Apple/usr/bin"
+        - "/Applications/Wireshark.app/Contents/MacOS"
+        - "/Applications/Little Snitch.app/Contents/Components"
+        - "/Applications/VMware Fusion.app/Contents/Public"
+        - "/usr/local/share/dotnet"
+        - "~/.dotnet/tools"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt:4 (project)"
+    mode: "program"
+    variable: "CMAKE_TAPI"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "tapi"
+    candidate_directories:
+      - "/usr/bin/"
+      - "/usr/local/bin/"
+      - "/usr/local/sbin/"
+      - "/opt/homebrew/bin/"
+      - "/System/Volumes/Data/Applications/Wine Stable.app/Contents/Resources/wine/bin/"
+      - "/usr/local/Cellar/python@3.11/3.11.8/bin/"
+      - "/Users/zach/.pyenv/shims/"
+      - "/usr/local/opt/ruby/bin/"
+      - "/usr/local/lib/ruby/gems/2.7.0/bin/"
+      - "/usr/local/bin/python3.11/"
+      - "/usr/local/opt/python@2/libexec/bin/"
+      - "/bin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.11/bin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.12/bin/"
+      - "/opt/local/bin/"
+      - "/opt/local/sbin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.10/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/opt/minicom/2.2/bin/"
+      - "/Users/zach/Library/Python/2.7/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/X11/bin/"
+      - "/usr/local/CrossPack-AVR/bin/"
+      - "/Library/Apple/usr/bin/"
+      - "/Applications/Wireshark.app/Contents/MacOS/"
+      - "/Applications/Little Snitch.app/Contents/Components/"
+      - "/Applications/VMware Fusion.app/Contents/Public/"
+      - "/usr/local/share/dotnet/"
+      - "/Users/zach/.dotnet/tools/"
+    searched_directories:
+      - "/usr/bin/tapi"
+      - "/usr/local/bin/tapi"
+      - "/usr/local/sbin/tapi"
+      - "/opt/homebrew/bin/tapi"
+      - "/System/Volumes/Data/Applications/Wine Stable.app/Contents/Resources/wine/bin/tapi"
+      - "/usr/local/Cellar/python@3.11/3.11.8/bin/tapi"
+      - "/Users/zach/.pyenv/shims/tapi"
+      - "/usr/local/opt/ruby/bin/tapi"
+      - "/usr/local/lib/ruby/gems/2.7.0/bin/tapi"
+      - "/usr/local/bin/python3.11/tapi"
+      - "/usr/local/opt/python@2/libexec/bin/tapi"
+      - "/bin/tapi"
+      - "/Library/Frameworks/Python.framework/Versions/3.11/bin/tapi"
+      - "/Library/Frameworks/Python.framework/Versions/3.12/bin/tapi"
+      - "/opt/local/bin/tapi"
+      - "/opt/local/sbin/tapi"
+      - "/Library/Frameworks/Python.framework/Versions/3.10/bin/tapi"
+      - "/usr/sbin/tapi"
+      - "/sbin/tapi"
+      - "/opt/minicom/2.2/bin/tapi"
+      - "/Users/zach/Library/Python/2.7/bin/tapi"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/tapi"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/tapi"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/tapi"
+      - "/opt/X11/bin/tapi"
+      - "/usr/local/CrossPack-AVR/bin/tapi"
+      - "/Library/Apple/usr/bin/tapi"
+      - "/Applications/Wireshark.app/Contents/MacOS/tapi"
+      - "/Applications/Little Snitch.app/Contents/Components/tapi"
+      - "/Applications/VMware Fusion.app/Contents/Public/tapi"
+      - "/usr/local/share/dotnet/tapi"
+      - "/Users/zach/.dotnet/tools/tapi"
+    found: false
+    search_context:
+      ENV{PATH}:
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/opt/homebrew/bin"
+        - "/System/Volumes/Data/Applications/Wine Stable.app/Contents/Resources/wine/bin"
+        - "/usr/local/bin"
+        - "/usr/local/Cellar/python@3.11/3.11.8/bin"
+        - "/Users/Zach/.pyenv/shims"
+        - "/usr/local/sbin"
+        - "/usr/local/opt/ruby/bin"
+        - "/usr/local/lib/ruby/gems/2.7.0/bin"
+        - "/usr/local/Cellar/python@3.11/3.11.8/bin"
+        - "/usr/local/bin/python3.11"
+        - "/usr/local/opt/python@2/libexec/bin"
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/bin"
+        - "/Library/Frameworks/Python.framework/Versions/3.11/bin"
+        - "/Library/Frameworks/Python.framework/Versions/3.12/bin"
+        - "/opt/local/bin"
+        - "/opt/local/sbin"
+        - "/Library/Frameworks/Python.framework/Versions/3.10/bin"
+        - "/usr/local/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/opt/minicom/2.2/bin"
+        - "/Users/Zach/Library/Python/2.7/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/X11/bin"
+        - "/usr/local/CrossPack-AVR/bin"
+        - "/Library/Apple/usr/bin"
+        - "/Applications/Wireshark.app/Contents/MacOS"
+        - "/Applications/Little Snitch.app/Contents/Components"
+        - "/Applications/VMware Fusion.app/Contents/Public"
+        - "/usr/local/share/dotnet"
+        - "~/.dotnet/tools"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompiler.cmake:54 (find_program)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCXXCompiler.cmake:69 (_cmake_find_compiler)"
+      - "CMakeLists.txt:4 (project)"
+    mode: "program"
+    variable: "CMAKE_CXX_COMPILER"
+    description: "CXX compiler"
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "c++"
+      - "g++"
+      - "cl"
+      - "bcc"
+      - "icpx"
+      - "icx"
+      - "clang++"
+    candidate_directories:
+      - "/usr/bin/"
+    found: "/usr/bin/c++"
+    search_context:
+      ENV{PATH}:
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/opt/homebrew/bin"
+        - "/System/Volumes/Data/Applications/Wine Stable.app/Contents/Resources/wine/bin"
+        - "/usr/local/bin"
+        - "/usr/local/Cellar/python@3.11/3.11.8/bin"
+        - "/Users/Zach/.pyenv/shims"
+        - "/usr/local/sbin"
+        - "/usr/local/opt/ruby/bin"
+        - "/usr/local/lib/ruby/gems/2.7.0/bin"
+        - "/usr/local/Cellar/python@3.11/3.11.8/bin"
+        - "/usr/local/bin/python3.11"
+        - "/usr/local/opt/python@2/libexec/bin"
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/bin"
+        - "/Library/Frameworks/Python.framework/Versions/3.11/bin"
+        - "/Library/Frameworks/Python.framework/Versions/3.12/bin"
+        - "/opt/local/bin"
+        - "/opt/local/sbin"
+        - "/Library/Frameworks/Python.framework/Versions/3.10/bin"
+        - "/usr/local/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/opt/minicom/2.2/bin"
+        - "/Users/Zach/Library/Python/2.7/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/X11/bin"
+        - "/usr/local/CrossPack-AVR/bin"
+        - "/Library/Apple/usr/bin"
+        - "/Applications/Wireshark.app/Contents/MacOS"
+        - "/Applications/Little Snitch.app/Contents/Components"
+        - "/Applications/VMware Fusion.app/Contents/Public"
+        - "/usr/local/share/dotnet"
+        - "~/.dotnet/tools"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerId.cmake:462 (find_file)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerId.cmake:500 (CMAKE_DETERMINE_COMPILER_ID_WRITE)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerId.cmake:8 (CMAKE_DETERMINE_COMPILER_ID_BUILD)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCXXCompiler.cmake:125 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:4 (project)"
+    mode: "file"
+    variable: "src_in"
+    description: "Path to a file."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "CMakeCXXCompilerId.cpp.in"
+    candidate_directories:
+      - "/usr/local/share/cmake/Modules/"
+    found: "/usr/local/share/cmake/Modules/CMakeCXXCompilerId.cpp.in"
+    search_context:
+      ENV{PATH}:
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/opt/homebrew/bin"
+        - "/System/Volumes/Data/Applications/Wine Stable.app/Contents/Resources/wine/bin"
+        - "/usr/local/bin"
+        - "/usr/local/Cellar/python@3.11/3.11.8/bin"
+        - "/Users/Zach/.pyenv/shims"
+        - "/usr/local/sbin"
+        - "/usr/local/opt/ruby/bin"
+        - "/usr/local/lib/ruby/gems/2.7.0/bin"
+        - "/usr/local/Cellar/python@3.11/3.11.8/bin"
+        - "/usr/local/bin/python3.11"
+        - "/usr/local/opt/python@2/libexec/bin"
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/bin"
+        - "/Library/Frameworks/Python.framework/Versions/3.11/bin"
+        - "/Library/Frameworks/Python.framework/Versions/3.12/bin"
+        - "/opt/local/bin"
+        - "/opt/local/sbin"
+        - "/Library/Frameworks/Python.framework/Versions/3.10/bin"
+        - "/usr/local/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/opt/minicom/2.2/bin"
+        - "/Users/Zach/Library/Python/2.7/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/X11/bin"
+        - "/usr/local/CrossPack-AVR/bin"
+        - "/Library/Apple/usr/bin"
+        - "/Applications/Wireshark.app/Contents/MacOS"
+        - "/Applications/Little Snitch.app/Contents/Components"
+        - "/Applications/VMware Fusion.app/Contents/Public"
+        - "/usr/local/share/dotnet"
+        - "~/.dotnet/tools"
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCXXCompiler.cmake:125 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:4 (project)"
+    message: |
+      Compiling the CXX compiler identification source file "CMakeCXXCompilerId.cpp" succeeded.
+      Compiler: /usr/bin/c++ 
+      Build flags: 
+      Id flags:  
+      
+      The output was:
+      0
+      
+      
+      Compilation of the CXX compiler identification source "CMakeCXXCompilerId.cpp" produced "a.out"
+      
+      The CXX compiler identification is AppleClang, found in:
+        /Users/zach/gitr/Advisor-II-BLE-Receiver/build/CMakeFiles/4.2.1/CompilerIdCXX/a.out
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerId.cmake:290 (message)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCXXCompiler.cmake:125 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:4 (project)"
+    message: |
+      Detecting CXX compiler apple sysroot: "/usr/bin/c++" "-E" "apple-sdk.cpp"
+        # 1 "apple-sdk.cpp"
+        # 1 "<built-in>" 1
+        # 1 "<built-in>" 3
+        # 409 "<built-in>" 3
+        # 1 "<command line>" 1
+        # 1 "<built-in>" 2
+        # 1 "apple-sdk.cpp" 2
+        # 1 "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/AvailabilityMacros.h" 1 3 4
+        # 89 "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/AvailabilityMacros.h" 3 4
+        # 1 "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/AvailabilityVersions.h" 1 3 4
+        # 90 "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/AvailabilityMacros.h" 2 3 4
+        # 1 "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/TargetConditionals.h" 1 3 4
+        # 91 "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/AvailabilityMacros.h" 2 3 4
+        # 207 "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/AvailabilityMacros.h" 3 4
+        # 1 "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/Availability.h" 1 3 4
+        # 177 "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/Availability.h" 3 4
+        # 1 "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/AvailabilityInternal.h" 1 3 4
+        # 178 "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/Availability.h" 2 3 4
+        # 1 "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/AvailabilityInternalLegacy.h" 1 3 4
+        # 179 "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/Availability.h" 2 3 4
+        # 208 "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/AvailabilityMacros.h" 2 3 4
+        # 2 "apple-sdk.cpp" 2
+        
+        
+      Found apple sysroot: /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/Platform/Darwin.cmake:76 (find_program)"
+      - "/usr/local/share/cmake/Modules/CMakeSystemSpecificInformation.cmake:32 (include)"
+      - "CMakeLists.txt:4 (project)"
+    mode: "program"
+    variable: "CMAKE_INSTALL_NAME_TOOL"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "install_name_tool"
+    candidate_directories:
+      - "/usr/local/bin/"
+      - "/usr/local/sbin/"
+      - "/opt/homebrew/bin/"
+      - "/System/Volumes/Data/Applications/Wine Stable.app/Contents/Resources/wine/bin/"
+      - "/usr/local/Cellar/python@3.11/3.11.8/bin/"
+      - "/Users/zach/.pyenv/shims/"
+      - "/usr/local/opt/ruby/bin/"
+      - "/usr/local/lib/ruby/gems/2.7.0/bin/"
+      - "/usr/local/bin/python3.11/"
+      - "/usr/local/opt/python@2/libexec/bin/"
+      - "/bin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.11/bin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.12/bin/"
+      - "/opt/local/bin/"
+      - "/opt/local/sbin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.10/bin/"
+      - "/usr/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/opt/minicom/2.2/bin/"
+      - "/Users/zach/Library/Python/2.7/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/X11/bin/"
+      - "/usr/local/CrossPack-AVR/bin/"
+      - "/Library/Apple/usr/bin/"
+      - "/Applications/Wireshark.app/Contents/MacOS/"
+      - "/Applications/Little Snitch.app/Contents/Components/"
+      - "/Applications/VMware Fusion.app/Contents/Public/"
+      - "/usr/local/share/dotnet/"
+      - "/Users/zach/.dotnet/tools/"
+    searched_directories:
+      - "/usr/local/bin/install_name_tool"
+      - "/usr/local/sbin/install_name_tool"
+      - "/opt/homebrew/bin/install_name_tool"
+      - "/System/Volumes/Data/Applications/Wine Stable.app/Contents/Resources/wine/bin/install_name_tool"
+      - "/usr/local/Cellar/python@3.11/3.11.8/bin/install_name_tool"
+      - "/Users/zach/.pyenv/shims/install_name_tool"
+      - "/usr/local/opt/ruby/bin/install_name_tool"
+      - "/usr/local/lib/ruby/gems/2.7.0/bin/install_name_tool"
+      - "/usr/local/bin/python3.11/install_name_tool"
+      - "/usr/local/opt/python@2/libexec/bin/install_name_tool"
+      - "/bin/install_name_tool"
+      - "/Library/Frameworks/Python.framework/Versions/3.11/bin/install_name_tool"
+      - "/Library/Frameworks/Python.framework/Versions/3.12/bin/install_name_tool"
+      - "/opt/local/bin/install_name_tool"
+      - "/opt/local/sbin/install_name_tool"
+      - "/Library/Frameworks/Python.framework/Versions/3.10/bin/install_name_tool"
+    found: "/usr/bin/install_name_tool"
+    search_context:
+      ENV{PATH}:
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/opt/homebrew/bin"
+        - "/System/Volumes/Data/Applications/Wine Stable.app/Contents/Resources/wine/bin"
+        - "/usr/local/bin"
+        - "/usr/local/Cellar/python@3.11/3.11.8/bin"
+        - "/Users/Zach/.pyenv/shims"
+        - "/usr/local/sbin"
+        - "/usr/local/opt/ruby/bin"
+        - "/usr/local/lib/ruby/gems/2.7.0/bin"
+        - "/usr/local/Cellar/python@3.11/3.11.8/bin"
+        - "/usr/local/bin/python3.11"
+        - "/usr/local/opt/python@2/libexec/bin"
+        - "/usr/local/bin"
+        - "/usr/local/sbin"
+        - "/bin"
+        - "/Library/Frameworks/Python.framework/Versions/3.11/bin"
+        - "/Library/Frameworks/Python.framework/Versions/3.12/bin"
+        - "/opt/local/bin"
+        - "/opt/local/sbin"
+        - "/Library/Frameworks/Python.framework/Versions/3.10/bin"
+        - "/usr/local/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/opt/minicom/2.2/bin"
+        - "/Users/Zach/Library/Python/2.7/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/X11/bin"
+        - "/usr/local/CrossPack-AVR/bin"
+        - "/Library/Apple/usr/bin"
+        - "/Applications/Wireshark.app/Contents/MacOS"
+        - "/Applications/Little Snitch.app/Contents/Components"
+        - "/Applications/VMware Fusion.app/Contents/Public"
+        - "/usr/local/share/dotnet"
+        - "~/.dotnet/tools"
+      CMAKE_INSTALL_PREFIX: "/usr/local"
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerABI.cmake:83 (try_compile)"
+      - "/usr/local/share/cmake/Modules/CMakeTestCCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:4 (project)"
+    checks:
+      - "Detecting C compiler ABI info"
+    directories:
+      source: "/Users/zach/gitr/Advisor-II-BLE-Receiver/build/CMakeFiles/CMakeScratch/TryCompile-EScYaP"
+      binary: "/Users/zach/gitr/Advisor-II-BLE-Receiver/build/CMakeFiles/CMakeScratch/TryCompile-EScYaP"
+    cmakeVariables:
+      CMAKE_C_FLAGS: ""
+      CMAKE_C_FLAGS_DEBUG: "-g"
+      CMAKE_EXE_LINKER_FLAGS: ""
+      CMAKE_OSX_ARCHITECTURES: ""
+      CMAKE_OSX_DEPLOYMENT_TARGET: ""
+      CMAKE_OSX_SYSROOT: ""
+    buildResult:
+      variable: "CMAKE_C_ABI_COMPILED"
+      cached: true
+      stdout: |
+        Change Dir: '/Users/zach/gitr/Advisor-II-BLE-Receiver/build/CMakeFiles/CMakeScratch/TryCompile-EScYaP'
+        
+        Run Build Command(s): /usr/local/bin/cmake -E env VERBOSE=1 /usr/bin/make -f Makefile cmTC_1421d/fast
+        /Library/Developer/CommandLineTools/usr/bin/make  -f CMakeFiles/cmTC_1421d.dir/build.make CMakeFiles/cmTC_1421d.dir/build
+        Building C object CMakeFiles/cmTC_1421d.dir/CMakeCCompilerABI.c.o
+        /usr/bin/cc   -v -Wl,-v -MD -MT CMakeFiles/cmTC_1421d.dir/CMakeCCompilerABI.c.o -MF CMakeFiles/cmTC_1421d.dir/CMakeCCompilerABI.c.o.d -o CMakeFiles/cmTC_1421d.dir/CMakeCCompilerABI.c.o -c /usr/local/share/cmake/Modules/CMakeCCompilerABI.c
+        Apple clang version 16.0.0 (clang-1600.0.26.6)
+        Target: x86_64-apple-darwin23.6.0
+        Thread model: posix
+        InstalledDir: /Library/Developer/CommandLineTools/usr/bin
+        clang: warning: -Wl,-v: 'linker' input unused [-Wunused-command-line-argument]
+         "/Library/Developer/CommandLineTools/usr/bin/clang" -cc1 -triple x86_64-apple-macosx14.0.0 -Wundef-prefix=TARGET_OS_ -Wdeprecated-objc-isa-usage -Werror=deprecated-objc-isa-usage -Werror=implicit-function-declaration -emit-obj -mrelax-all -disable-free -clear-ast-before-backend -disable-llvm-verifier -discard-value-names -main-file-name CMakeCCompilerABI.c -mrelocation-model pic -pic-level 2 -mframe-pointer=all -fno-strict-return -ffp-contract=on -fno-rounding-math -funwind-tables=2 -target-sdk-version=15.2 -fvisibility-inlines-hidden-static-local-var -fno-modulemap-allow-subdirectory-search -target-cpu penryn -tune-cpu generic -debugger-tuning=lldb -target-linker-version 1115.7.3 -v -fcoverage-compilation-dir=/Users/zach/gitr/Advisor-II-BLE-Receiver/build/CMakeFiles/CMakeScratch/TryCompile-EScYaP -resource-dir /Library/Developer/CommandLineTools/usr/lib/clang/16 -dependency-file CMakeFiles/cmTC_1421d.dir/CMakeCCompilerABI.c.o.d -skip-unused-modulemap-deps -MT CMakeFiles/cmTC_1421d.dir/CMakeCCompilerABI.c.o -sys-header-deps -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -I/usr/local/include -internal-isystem /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/local/include -internal-isystem /Library/Developer/CommandLineTools/usr/lib/clang/16/include -internal-externc-isystem /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include -internal-externc-isystem /Library/Developer/CommandLineTools/usr/include -Wno-reorder-init-list -Wno-implicit-int-float-conversion -Wno-c99-designator -Wno-final-dtor-non-final-class -Wno-extra-semi-stmt -Wno-misleading-indentation -Wno-quoted-include-in-framework-header -Wno-implicit-fallthrough -Wno-enum-enum-conversion -Wno-enum-float-conversion -Wno-elaborated-enum-base -Wno-reserved-identifier -Wno-gnu-folding-constant -fdebug-compilation-dir=/Users/zach/gitr/Advisor-II-BLE-Receiver/build/CMakeFiles/CMakeScratch/TryCompile-EScYaP -ferror-limit 19 -stack-protector 1 -fstack-check -mdarwin-stkchk-strong-link -fblocks -fencode-extended-block-signature -fregister-global-dtors-with-atexit -fgnuc-version=4.2.1 -fmax-type-align=16 -fcommon -clang-vendor-feature=+disableNonDependentMemberExprInCurrentInstantiation -fno-odr-hash-protocols -clang-vendor-feature=+enableAggressiveVLAFolding -clang-vendor-feature=+revert09abecef7bbf -clang-vendor-feature=+thisNoAlignAttr -clang-vendor-feature=+thisNoNullAttr -clang-vendor-feature=+disableAtImportPrivateFrameworkInImplementationError -D__GCC_HAVE_DWARF2_CFI_ASM=1 -o CMakeFiles/cmTC_1421d.dir/CMakeCCompilerABI.c.o -x c /usr/local/share/cmake/Modules/CMakeCCompilerABI.c
+        clang -cc1 version 16.0.0 (clang-1600.0.26.6) default target x86_64-apple-darwin23.6.0
+        ignoring nonexistent directory "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/local/include"
+        ignoring nonexistent directory "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/Library/Frameworks"
+        #include "..." search starts here:
+        #include <...> search starts here:
+         /usr/local/include
+         /Library/Developer/CommandLineTools/usr/lib/clang/16/include
+         /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include
+         /Library/Developer/CommandLineTools/usr/include
+         /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks (framework directory)
+        End of search list.
+        Linking C executable cmTC_1421d
+        /usr/local/bin/cmake -E cmake_link_script CMakeFiles/cmTC_1421d.dir/link.txt --verbose=1
+        Apple clang version 16.0.0 (clang-1600.0.26.6)
+        Target: x86_64-apple-darwin23.6.0
+        Thread model: posix
+        InstalledDir: /Library/Developer/CommandLineTools/usr/bin
+         "/Library/Developer/CommandLineTools/usr/bin/ld" -demangle -lto_library /Library/Developer/CommandLineTools/usr/lib/libLTO.dylib -dynamic -arch x86_64 -platform_version macos 14.0.0 15.2 -syslibroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -mllvm -enable-linkonceodr-outlining -o cmTC_1421d -L/usr/local/lib -search_paths_first -headerpad_max_install_names -v CMakeFiles/cmTC_1421d.dir/CMakeCCompilerABI.c.o -lSystem /Library/Developer/CommandLineTools/usr/lib/clang/16/lib/darwin/libclang_rt.osx.a
+        @(#)PROGRAM:ld PROJECT:ld-1115.7.3
+        BUILD 23:50:35 Dec  5 2024
+        configured to support archs: armv6 armv7 armv7s arm64 arm64e arm64_32 i386 x86_64 x86_64h armv6m armv7k armv7m armv7em
+        will use ld-classic for: armv6 armv7 armv7s i386 armv6m armv7k armv7m armv7em
+        LTO support using: LLVM version 16.0.0 (static support for 29, runtime is 29)
+        TAPI support using: Apple TAPI version 16.0.0 (tapi-1600.0.11.9)
+        Library search paths:
+        	/usr/local/lib
+        	/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib
+        	/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib/swift
+        Framework search paths:
+        	/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks
+        /usr/bin/cc -Wl,-search_paths_first -Wl,-headerpad_max_install_names  -v -Wl,-v CMakeFiles/cmTC_1421d.dir/CMakeCCompilerABI.c.o -o cmTC_1421d
+        
+      exitCode: 0
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerABI.cmake:122 (message)"
+      - "/usr/local/share/cmake/Modules/CMakeTestCCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:4 (project)"
+    message: |
+      Effective list of requested architectures (possibly empty)  : ""
+      Effective list of architectures found in the ABI info binary: "x86_64"
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerABI.cmake:217 (message)"
+      - "/usr/local/share/cmake/Modules/CMakeTestCCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:4 (project)"
+    message: |
+      Parsed C implicit include dir info: rv=done
+        found start of include info
+        found start of implicit include info
+          add: [/usr/local/include]
+          add: [/Library/Developer/CommandLineTools/usr/lib/clang/16/include]
+          add: [/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include]
+          add: [/Library/Developer/CommandLineTools/usr/include]
+        end of search list found
+        collapse include dir [/usr/local/include] ==> [/usr/local/include]
+        collapse include dir [/Library/Developer/CommandLineTools/usr/lib/clang/16/include] ==> [/Library/Developer/CommandLineTools/usr/lib/clang/16/include]
+        collapse include dir [/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include] ==> [/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include]
+        collapse include dir [/Library/Developer/CommandLineTools/usr/include] ==> [/Library/Developer/CommandLineTools/usr/include]
+        implicit include dirs: [/usr/local/include;/Library/Developer/CommandLineTools/usr/lib/clang/16/include;/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include;/Library/Developer/CommandLineTools/usr/include]
+      
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerABI.cmake:253 (message)"
+      - "/usr/local/share/cmake/Modules/CMakeTestCCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:4 (project)"
+    message: |
+      Parsed C implicit link information:
+        link line regex: [^( *|.*[/\\])(ld[0-9]*(|\\.[a-rt-z][a-z]*|\\.s[a-np-z][a-z]*|\\.so[a-z]+)|CMAKE_LINK_STARTFILE-NOTFOUND|([^/\\]+-)?ld|collect2)[^/\\]*( |$)]
+        linker tool regex: [^[ 	]*(->|"|[0-9]+>[ 	-]*Build:[ 	0-9]+ ms[ 	]*)?[ 	]*(([^"]*[/\\])?(ld[0-9]*(|\\.[a-rt-z][a-z]*|\\.s[a-np-z][a-z]*|\\.so[a-z]+)))("|,| |$)]
+        ignore line: [Change Dir: '/Users/zach/gitr/Advisor-II-BLE-Receiver/build/CMakeFiles/CMakeScratch/TryCompile-EScYaP']
+        ignore line: []
+        ignore line: [Run Build Command(s): /usr/local/bin/cmake -E env VERBOSE=1 /usr/bin/make -f Makefile cmTC_1421d/fast]
+        ignore line: [/Library/Developer/CommandLineTools/usr/bin/make  -f CMakeFiles/cmTC_1421d.dir/build.make CMakeFiles/cmTC_1421d.dir/build]
+        ignore line: [Building C object CMakeFiles/cmTC_1421d.dir/CMakeCCompilerABI.c.o]
+        ignore line: [/usr/bin/cc   -v -Wl -v -MD -MT CMakeFiles/cmTC_1421d.dir/CMakeCCompilerABI.c.o -MF CMakeFiles/cmTC_1421d.dir/CMakeCCompilerABI.c.o.d -o CMakeFiles/cmTC_1421d.dir/CMakeCCompilerABI.c.o -c /usr/local/share/cmake/Modules/CMakeCCompilerABI.c]
+        ignore line: [Apple clang version 16.0.0 (clang-1600.0.26.6)]
+        ignore line: [Target: x86_64-apple-darwin23.6.0]
+        ignore line: [Thread model: posix]
+        ignore line: [InstalledDir: /Library/Developer/CommandLineTools/usr/bin]
+        ignore line: [clang: warning: -Wl -v: 'linker' input unused [-Wunused-command-line-argument]]
+        ignore line: [ "/Library/Developer/CommandLineTools/usr/bin/clang" -cc1 -triple x86_64-apple-macosx14.0.0 -Wundef-prefix=TARGET_OS_ -Wdeprecated-objc-isa-usage -Werror=deprecated-objc-isa-usage -Werror=implicit-function-declaration -emit-obj -mrelax-all -disable-free -clear-ast-before-backend -disable-llvm-verifier -discard-value-names -main-file-name CMakeCCompilerABI.c -mrelocation-model pic -pic-level 2 -mframe-pointer=all -fno-strict-return -ffp-contract=on -fno-rounding-math -funwind-tables=2 -target-sdk-version=15.2 -fvisibility-inlines-hidden-static-local-var -fno-modulemap-allow-subdirectory-search -target-cpu penryn -tune-cpu generic -debugger-tuning=lldb -target-linker-version 1115.7.3 -v -fcoverage-compilation-dir=/Users/zach/gitr/Advisor-II-BLE-Receiver/build/CMakeFiles/CMakeScratch/TryCompile-EScYaP -resource-dir /Library/Developer/CommandLineTools/usr/lib/clang/16 -dependency-file CMakeFiles/cmTC_1421d.dir/CMakeCCompilerABI.c.o.d -skip-unused-modulemap-deps -MT CMakeFiles/cmTC_1421d.dir/CMakeCCompilerABI.c.o -sys-header-deps -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -I/usr/local/include -internal-isystem /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/local/include -internal-isystem /Library/Developer/CommandLineTools/usr/lib/clang/16/include -internal-externc-isystem /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include -internal-externc-isystem /Library/Developer/CommandLineTools/usr/include -Wno-reorder-init-list -Wno-implicit-int-float-conversion -Wno-c99-designator -Wno-final-dtor-non-final-class -Wno-extra-semi-stmt -Wno-misleading-indentation -Wno-quoted-include-in-framework-header -Wno-implicit-fallthrough -Wno-enum-enum-conversion -Wno-enum-float-conversion -Wno-elaborated-enum-base -Wno-reserved-identifier -Wno-gnu-folding-constant -fdebug-compilation-dir=/Users/zach/gitr/Advisor-II-BLE-Receiver/build/CMakeFiles/CMakeScratch/TryCompile-EScYaP -ferror-limit 19 -stack-protector 1 -fstack-check -mdarwin-stkchk-strong-link -fblocks -fencode-extended-block-signature -fregister-global-dtors-with-atexit -fgnuc-version=4.2.1 -fmax-type-align=16 -fcommon -clang-vendor-feature=+disableNonDependentMemberExprInCurrentInstantiation -fno-odr-hash-protocols -clang-vendor-feature=+enableAggressiveVLAFolding -clang-vendor-feature=+revert09abecef7bbf -clang-vendor-feature=+thisNoAlignAttr -clang-vendor-feature=+thisNoNullAttr -clang-vendor-feature=+disableAtImportPrivateFrameworkInImplementationError -D__GCC_HAVE_DWARF2_CFI_ASM=1 -o CMakeFiles/cmTC_1421d.dir/CMakeCCompilerABI.c.o -x c /usr/local/share/cmake/Modules/CMakeCCompilerABI.c]
+        ignore line: [clang -cc1 version 16.0.0 (clang-1600.0.26.6) default target x86_64-apple-darwin23.6.0]
+        ignore line: [ignoring nonexistent directory "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/local/include"]
+        ignore line: [ignoring nonexistent directory "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/Library/Frameworks"]
+        ignore line: [#include "..." search starts here:]
+        ignore line: [#include <...> search starts here:]
+        ignore line: [ /usr/local/include]
+        ignore line: [ /Library/Developer/CommandLineTools/usr/lib/clang/16/include]
+        ignore line: [ /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include]
+        ignore line: [ /Library/Developer/CommandLineTools/usr/include]
+        ignore line: [ /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks (framework directory)]
+        ignore line: [End of search list.]
+        ignore line: [Linking C executable cmTC_1421d]
+        ignore line: [/usr/local/bin/cmake -E cmake_link_script CMakeFiles/cmTC_1421d.dir/link.txt --verbose=1]
+        ignore line: [Apple clang version 16.0.0 (clang-1600.0.26.6)]
+        ignore line: [Target: x86_64-apple-darwin23.6.0]
+        ignore line: [Thread model: posix]
+        ignore line: [InstalledDir: /Library/Developer/CommandLineTools/usr/bin]
+        link line: [ "/Library/Developer/CommandLineTools/usr/bin/ld" -demangle -lto_library /Library/Developer/CommandLineTools/usr/lib/libLTO.dylib -dynamic -arch x86_64 -platform_version macos 14.0.0 15.2 -syslibroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -mllvm -enable-linkonceodr-outlining -o cmTC_1421d -L/usr/local/lib -search_paths_first -headerpad_max_install_names -v CMakeFiles/cmTC_1421d.dir/CMakeCCompilerABI.c.o -lSystem /Library/Developer/CommandLineTools/usr/lib/clang/16/lib/darwin/libclang_rt.osx.a]
+          arg [/Library/Developer/CommandLineTools/usr/bin/ld] ==> ignore
+          arg [-demangle] ==> ignore
+          arg [-lto_library] ==> ignore, skip following value
+          arg [/Library/Developer/CommandLineTools/usr/lib/libLTO.dylib] ==> skip value of -lto_library
+          arg [-dynamic] ==> ignore
+          arg [-arch] ==> ignore
+          arg [x86_64] ==> ignore
+          arg [-platform_version] ==> ignore
+          arg [macos] ==> ignore
+          arg [14.0.0] ==> ignore
+          arg [15.2] ==> ignore
+          arg [-syslibroot] ==> ignore
+          arg [/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk] ==> ignore
+          arg [-mllvm] ==> ignore
+          arg [-enable-linkonceodr-outlining] ==> ignore
+          arg [-o] ==> ignore
+          arg [cmTC_1421d] ==> ignore
+          arg [-L/usr/local/lib] ==> dir [/usr/local/lib]
+          arg [-search_paths_first] ==> ignore
+          arg [-headerpad_max_install_names] ==> ignore
+          arg [-v] ==> ignore
+          arg [CMakeFiles/cmTC_1421d.dir/CMakeCCompilerABI.c.o] ==> ignore
+          arg [-lSystem] ==> lib [System]
+          arg [/Library/Developer/CommandLineTools/usr/lib/clang/16/lib/darwin/libclang_rt.osx.a] ==> lib [/Library/Developer/CommandLineTools/usr/lib/clang/16/lib/darwin/libclang_rt.osx.a]
+        linker tool for 'C': /Library/Developer/CommandLineTools/usr/bin/ld
+        Library search paths: [;/usr/local/lib;/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib;/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib/swift]
+        Framework search paths: [;/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks]
+        remove lib [System]
+        remove lib [/Library/Developer/CommandLineTools/usr/lib/clang/16/lib/darwin/libclang_rt.osx.a]
+        collapse library dir [/usr/local/lib] ==> [/usr/local/lib]
+        collapse library dir [/usr/local/lib] ==> [/usr/local/lib]
+        collapse library dir [/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib] ==> [/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib]
+        collapse library dir [/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib/swift] ==> [/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib/swift]
+        collapse framework dir [/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks] ==> [/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks]
+        implicit libs: []
+        implicit objs: []
+        implicit dirs: [/usr/local/lib;/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib;/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib/swift]
+        implicit fwks: [/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks]
+      
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/Internal/CMakeDetermineLinkerId.cmake:38 (message)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerABI.cmake:299 (cmake_determine_linker_id)"
+      - "/usr/local/share/cmake/Modules/CMakeTestCCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:4 (project)"
+    message: |
+      Running the C compiler's linker: "/Library/Developer/CommandLineTools/usr/bin/ld" "-v"
+      @(#)PROGRAM:ld PROJECT:ld-1115.7.3
+      BUILD 23:50:35 Dec  5 2024
+      configured to support archs: armv6 armv7 armv7s arm64 arm64e arm64_32 i386 x86_64 x86_64h armv6m armv7k armv7m armv7em
+      will use ld-classic for: armv6 armv7 armv7s i386 armv6m armv7k armv7m armv7em
+      LTO support using: LLVM version 16.0.0 (static support for 29, runtime is 29)
+      TAPI support using: Apple TAPI version 16.0.0 (tapi-1600.0.11.9)
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerABI.cmake:83 (try_compile)"
+      - "/usr/local/share/cmake/Modules/CMakeTestCXXCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:4 (project)"
+    checks:
+      - "Detecting CXX compiler ABI info"
+    directories:
+      source: "/Users/zach/gitr/Advisor-II-BLE-Receiver/build/CMakeFiles/CMakeScratch/TryCompile-CdvL6l"
+      binary: "/Users/zach/gitr/Advisor-II-BLE-Receiver/build/CMakeFiles/CMakeScratch/TryCompile-CdvL6l"
+    cmakeVariables:
+      CMAKE_CXX_FLAGS: ""
+      CMAKE_CXX_FLAGS_DEBUG: "-g"
+      CMAKE_CXX_SCAN_FOR_MODULES: "OFF"
+      CMAKE_EXE_LINKER_FLAGS: ""
+      CMAKE_OSX_ARCHITECTURES: ""
+      CMAKE_OSX_DEPLOYMENT_TARGET: ""
+      CMAKE_OSX_SYSROOT: ""
+    buildResult:
+      variable: "CMAKE_CXX_ABI_COMPILED"
+      cached: true
+      stdout: |
+        Change Dir: '/Users/zach/gitr/Advisor-II-BLE-Receiver/build/CMakeFiles/CMakeScratch/TryCompile-CdvL6l'
+        
+        Run Build Command(s): /usr/local/bin/cmake -E env VERBOSE=1 /usr/bin/make -f Makefile cmTC_d90a2/fast
+        /Library/Developer/CommandLineTools/usr/bin/make  -f CMakeFiles/cmTC_d90a2.dir/build.make CMakeFiles/cmTC_d90a2.dir/build
+        Building CXX object CMakeFiles/cmTC_d90a2.dir/CMakeCXXCompilerABI.cpp.o
+        /usr/bin/c++   -v -Wl,-v -MD -MT CMakeFiles/cmTC_d90a2.dir/CMakeCXXCompilerABI.cpp.o -MF CMakeFiles/cmTC_d90a2.dir/CMakeCXXCompilerABI.cpp.o.d -o CMakeFiles/cmTC_d90a2.dir/CMakeCXXCompilerABI.cpp.o -c /usr/local/share/cmake/Modules/CMakeCXXCompilerABI.cpp
+        Apple clang version 16.0.0 (clang-1600.0.26.6)
+        Target: x86_64-apple-darwin23.6.0
+        Thread model: posix
+        InstalledDir: /Library/Developer/CommandLineTools/usr/bin
+        clang++: warning: -Wl,-v: 'linker' input unused [-Wunused-command-line-argument]
+        ignoring nonexistent directory "/Library/Developer/CommandLineTools/usr/bin/../include/c++/v1"
+         "/Library/Developer/CommandLineTools/usr/bin/clang" -cc1 -triple x86_64-apple-macosx14.0.0 -Wundef-prefix=TARGET_OS_ -Wdeprecated-objc-isa-usage -Werror=deprecated-objc-isa-usage -Werror=implicit-function-declaration -emit-obj -mrelax-all -disable-free -clear-ast-before-backend -disable-llvm-verifier -discard-value-names -main-file-name CMakeCXXCompilerABI.cpp -mrelocation-model pic -pic-level 2 -mframe-pointer=all -fno-strict-return -ffp-contract=on -fno-rounding-math -funwind-tables=2 -target-sdk-version=15.2 -fvisibility-inlines-hidden-static-local-var -fno-modulemap-allow-subdirectory-search -target-cpu penryn -tune-cpu generic -debugger-tuning=lldb -target-linker-version 1115.7.3 -v -fcoverage-compilation-dir=/Users/zach/gitr/Advisor-II-BLE-Receiver/build/CMakeFiles/CMakeScratch/TryCompile-CdvL6l -resource-dir /Library/Developer/CommandLineTools/usr/lib/clang/16 -dependency-file CMakeFiles/cmTC_d90a2.dir/CMakeCXXCompilerABI.cpp.o.d -skip-unused-modulemap-deps -MT CMakeFiles/cmTC_d90a2.dir/CMakeCXXCompilerABI.cpp.o -sys-header-deps -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -I/usr/local/include -internal-isystem /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -internal-isystem /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/local/include -internal-isystem /Library/Developer/CommandLineTools/usr/lib/clang/16/include -internal-externc-isystem /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include -internal-externc-isystem /Library/Developer/CommandLineTools/usr/include -Wno-reorder-init-list -Wno-implicit-int-float-conversion -Wno-c99-designator -Wno-final-dtor-non-final-class -Wno-extra-semi-stmt -Wno-misleading-indentation -Wno-quoted-include-in-framework-header -Wno-implicit-fallthrough -Wno-enum-enum-conversion -Wno-enum-float-conversion -Wno-elaborated-enum-base -Wno-reserved-identifier -Wno-gnu-folding-constant -fdeprecated-macro -fdebug-compilation-dir=/Users/zach/gitr/Advisor-II-BLE-Receiver/build/CMakeFiles/CMakeScratch/TryCompile-CdvL6l -ferror-limit 19 -stack-protector 1 -fstack-check -mdarwin-stkchk-strong-link -fblocks -fencode-extended-block-signature -fregister-global-dtors-with-atexit -fgnuc-version=4.2.1 -fno-cxx-modules -fcxx-exceptions -fexceptions -fmax-type-align=16 -fcommon -clang-vendor-feature=+disableNonDependentMemberExprInCurrentInstantiation -fno-odr-hash-protocols -clang-vendor-feature=+enableAggressiveVLAFolding -clang-vendor-feature=+revert09abecef7bbf -clang-vendor-feature=+thisNoAlignAttr -clang-vendor-feature=+thisNoNullAttr -clang-vendor-feature=+disableAtImportPrivateFrameworkInImplementationError -D__GCC_HAVE_DWARF2_CFI_ASM=1 -o CMakeFiles/cmTC_d90a2.dir/CMakeCXXCompilerABI.cpp.o -x c++ /usr/local/share/cmake/Modules/CMakeCXXCompilerABI.cpp
+        clang -cc1 version 16.0.0 (clang-1600.0.26.6) default target x86_64-apple-darwin23.6.0
+        ignoring nonexistent directory "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/local/include"
+        ignoring nonexistent directory "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/Library/Frameworks"
+        #include "..." search starts here:
+        #include <...> search starts here:
+         /usr/local/include
+         /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1
+         /Library/Developer/CommandLineTools/usr/lib/clang/16/include
+         /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include
+         /Library/Developer/CommandLineTools/usr/include
+         /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks (framework directory)
+        End of search list.
+        Linking CXX executable cmTC_d90a2
+        /usr/local/bin/cmake -E cmake_link_script CMakeFiles/cmTC_d90a2.dir/link.txt --verbose=1
+        Apple clang version 16.0.0 (clang-1600.0.26.6)
+        Target: x86_64-apple-darwin23.6.0
+        Thread model: posix
+        InstalledDir: /Library/Developer/CommandLineTools/usr/bin
+         "/Library/Developer/CommandLineTools/usr/bin/ld" -demangle -lto_library /Library/Developer/CommandLineTools/usr/lib/libLTO.dylib -dynamic -arch x86_64 -platform_version macos 14.0.0 15.2 -syslibroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -mllvm -enable-linkonceodr-outlining -o cmTC_d90a2 -L/usr/local/lib -search_paths_first -headerpad_max_install_names -v CMakeFiles/cmTC_d90a2.dir/CMakeCXXCompilerABI.cpp.o -lc++ -lSystem /Library/Developer/CommandLineTools/usr/lib/clang/16/lib/darwin/libclang_rt.osx.a
+        @(#)PROGRAM:ld PROJECT:ld-1115.7.3
+        BUILD 23:50:35 Dec  5 2024
+        configured to support archs: armv6 armv7 armv7s arm64 arm64e arm64_32 i386 x86_64 x86_64h armv6m armv7k armv7m armv7em
+        will use ld-classic for: armv6 armv7 armv7s i386 armv6m armv7k armv7m armv7em
+        LTO support using: LLVM version 16.0.0 (static support for 29, runtime is 29)
+        TAPI support using: Apple TAPI version 16.0.0 (tapi-1600.0.11.9)
+        Library search paths:
+        	/usr/local/lib
+        	/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib
+        	/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib/swift
+        Framework search paths:
+        	/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks
+        /usr/bin/c++ -Wl,-search_paths_first -Wl,-headerpad_max_install_names  -v -Wl,-v CMakeFiles/cmTC_d90a2.dir/CMakeCXXCompilerABI.cpp.o -o cmTC_d90a2
+        
+      exitCode: 0
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerABI.cmake:122 (message)"
+      - "/usr/local/share/cmake/Modules/CMakeTestCXXCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:4 (project)"
+    message: |
+      Effective list of requested architectures (possibly empty)  : ""
+      Effective list of architectures found in the ABI info binary: "x86_64"
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerABI.cmake:217 (message)"
+      - "/usr/local/share/cmake/Modules/CMakeTestCXXCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:4 (project)"
+    message: |
+      Parsed CXX implicit include dir info: rv=done
+        found start of include info
+        found start of implicit include info
+          add: [/usr/local/include]
+          add: [/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1]
+          add: [/Library/Developer/CommandLineTools/usr/lib/clang/16/include]
+          add: [/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include]
+          add: [/Library/Developer/CommandLineTools/usr/include]
+        end of search list found
+        collapse include dir [/usr/local/include] ==> [/usr/local/include]
+        collapse include dir [/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1] ==> [/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1]
+        collapse include dir [/Library/Developer/CommandLineTools/usr/lib/clang/16/include] ==> [/Library/Developer/CommandLineTools/usr/lib/clang/16/include]
+        collapse include dir [/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include] ==> [/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include]
+        collapse include dir [/Library/Developer/CommandLineTools/usr/include] ==> [/Library/Developer/CommandLineTools/usr/include]
+        implicit include dirs: [/usr/local/include;/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1;/Library/Developer/CommandLineTools/usr/lib/clang/16/include;/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include;/Library/Developer/CommandLineTools/usr/include]
+      
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerABI.cmake:253 (message)"
+      - "/usr/local/share/cmake/Modules/CMakeTestCXXCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:4 (project)"
+    message: |
+      Parsed CXX implicit link information:
+        link line regex: [^( *|.*[/\\])(ld[0-9]*(|\\.[a-rt-z][a-z]*|\\.s[a-np-z][a-z]*|\\.so[a-z]+)|CMAKE_LINK_STARTFILE-NOTFOUND|([^/\\]+-)?ld|collect2)[^/\\]*( |$)]
+        linker tool regex: [^[ 	]*(->|"|[0-9]+>[ 	-]*Build:[ 	0-9]+ ms[ 	]*)?[ 	]*(([^"]*[/\\])?(ld[0-9]*(|\\.[a-rt-z][a-z]*|\\.s[a-np-z][a-z]*|\\.so[a-z]+)))("|,| |$)]
+        ignore line: [Change Dir: '/Users/zach/gitr/Advisor-II-BLE-Receiver/build/CMakeFiles/CMakeScratch/TryCompile-CdvL6l']
+        ignore line: []
+        ignore line: [Run Build Command(s): /usr/local/bin/cmake -E env VERBOSE=1 /usr/bin/make -f Makefile cmTC_d90a2/fast]
+        ignore line: [/Library/Developer/CommandLineTools/usr/bin/make  -f CMakeFiles/cmTC_d90a2.dir/build.make CMakeFiles/cmTC_d90a2.dir/build]
+        ignore line: [Building CXX object CMakeFiles/cmTC_d90a2.dir/CMakeCXXCompilerABI.cpp.o]
+        ignore line: [/usr/bin/c++   -v -Wl -v -MD -MT CMakeFiles/cmTC_d90a2.dir/CMakeCXXCompilerABI.cpp.o -MF CMakeFiles/cmTC_d90a2.dir/CMakeCXXCompilerABI.cpp.o.d -o CMakeFiles/cmTC_d90a2.dir/CMakeCXXCompilerABI.cpp.o -c /usr/local/share/cmake/Modules/CMakeCXXCompilerABI.cpp]
+        ignore line: [Apple clang version 16.0.0 (clang-1600.0.26.6)]
+        ignore line: [Target: x86_64-apple-darwin23.6.0]
+        ignore line: [Thread model: posix]
+        ignore line: [InstalledDir: /Library/Developer/CommandLineTools/usr/bin]
+        ignore line: [clang++: warning: -Wl -v: 'linker' input unused [-Wunused-command-line-argument]]
+        ignore line: [ignoring nonexistent directory "/Library/Developer/CommandLineTools/usr/bin/../include/c++/v1"]
+        ignore line: [ "/Library/Developer/CommandLineTools/usr/bin/clang" -cc1 -triple x86_64-apple-macosx14.0.0 -Wundef-prefix=TARGET_OS_ -Wdeprecated-objc-isa-usage -Werror=deprecated-objc-isa-usage -Werror=implicit-function-declaration -emit-obj -mrelax-all -disable-free -clear-ast-before-backend -disable-llvm-verifier -discard-value-names -main-file-name CMakeCXXCompilerABI.cpp -mrelocation-model pic -pic-level 2 -mframe-pointer=all -fno-strict-return -ffp-contract=on -fno-rounding-math -funwind-tables=2 -target-sdk-version=15.2 -fvisibility-inlines-hidden-static-local-var -fno-modulemap-allow-subdirectory-search -target-cpu penryn -tune-cpu generic -debugger-tuning=lldb -target-linker-version 1115.7.3 -v -fcoverage-compilation-dir=/Users/zach/gitr/Advisor-II-BLE-Receiver/build/CMakeFiles/CMakeScratch/TryCompile-CdvL6l -resource-dir /Library/Developer/CommandLineTools/usr/lib/clang/16 -dependency-file CMakeFiles/cmTC_d90a2.dir/CMakeCXXCompilerABI.cpp.o.d -skip-unused-modulemap-deps -MT CMakeFiles/cmTC_d90a2.dir/CMakeCXXCompilerABI.cpp.o -sys-header-deps -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -I/usr/local/include -internal-isystem /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -internal-isystem /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/local/include -internal-isystem /Library/Developer/CommandLineTools/usr/lib/clang/16/include -internal-externc-isystem /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include -internal-externc-isystem /Library/Developer/CommandLineTools/usr/include -Wno-reorder-init-list -Wno-implicit-int-float-conversion -Wno-c99-designator -Wno-final-dtor-non-final-class -Wno-extra-semi-stmt -Wno-misleading-indentation -Wno-quoted-include-in-framework-header -Wno-implicit-fallthrough -Wno-enum-enum-conversion -Wno-enum-float-conversion -Wno-elaborated-enum-base -Wno-reserved-identifier -Wno-gnu-folding-constant -fdeprecated-macro -fdebug-compilation-dir=/Users/zach/gitr/Advisor-II-BLE-Receiver/build/CMakeFiles/CMakeScratch/TryCompile-CdvL6l -ferror-limit 19 -stack-protector 1 -fstack-check -mdarwin-stkchk-strong-link -fblocks -fencode-extended-block-signature -fregister-global-dtors-with-atexit -fgnuc-version=4.2.1 -fno-cxx-modules -fcxx-exceptions -fexceptions -fmax-type-align=16 -fcommon -clang-vendor-feature=+disableNonDependentMemberExprInCurrentInstantiation -fno-odr-hash-protocols -clang-vendor-feature=+enableAggressiveVLAFolding -clang-vendor-feature=+revert09abecef7bbf -clang-vendor-feature=+thisNoAlignAttr -clang-vendor-feature=+thisNoNullAttr -clang-vendor-feature=+disableAtImportPrivateFrameworkInImplementationError -D__GCC_HAVE_DWARF2_CFI_ASM=1 -o CMakeFiles/cmTC_d90a2.dir/CMakeCXXCompilerABI.cpp.o -x c++ /usr/local/share/cmake/Modules/CMakeCXXCompilerABI.cpp]
+        ignore line: [clang -cc1 version 16.0.0 (clang-1600.0.26.6) default target x86_64-apple-darwin23.6.0]
+        ignore line: [ignoring nonexistent directory "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/local/include"]
+        ignore line: [ignoring nonexistent directory "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/Library/Frameworks"]
+        ignore line: [#include "..." search starts here:]
+        ignore line: [#include <...> search starts here:]
+        ignore line: [ /usr/local/include]
+        ignore line: [ /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1]
+        ignore line: [ /Library/Developer/CommandLineTools/usr/lib/clang/16/include]
+        ignore line: [ /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include]
+        ignore line: [ /Library/Developer/CommandLineTools/usr/include]
+        ignore line: [ /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks (framework directory)]
+        ignore line: [End of search list.]
+        ignore line: [Linking CXX executable cmTC_d90a2]
+        ignore line: [/usr/local/bin/cmake -E cmake_link_script CMakeFiles/cmTC_d90a2.dir/link.txt --verbose=1]
+        ignore line: [Apple clang version 16.0.0 (clang-1600.0.26.6)]
+        ignore line: [Target: x86_64-apple-darwin23.6.0]
+        ignore line: [Thread model: posix]
+        ignore line: [InstalledDir: /Library/Developer/CommandLineTools/usr/bin]
+        link line: [ "/Library/Developer/CommandLineTools/usr/bin/ld" -demangle -lto_library /Library/Developer/CommandLineTools/usr/lib/libLTO.dylib -dynamic -arch x86_64 -platform_version macos 14.0.0 15.2 -syslibroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -mllvm -enable-linkonceodr-outlining -o cmTC_d90a2 -L/usr/local/lib -search_paths_first -headerpad_max_install_names -v CMakeFiles/cmTC_d90a2.dir/CMakeCXXCompilerABI.cpp.o -lc++ -lSystem /Library/Developer/CommandLineTools/usr/lib/clang/16/lib/darwin/libclang_rt.osx.a]
+          arg [/Library/Developer/CommandLineTools/usr/bin/ld] ==> ignore
+          arg [-demangle] ==> ignore
+          arg [-lto_library] ==> ignore, skip following value
+          arg [/Library/Developer/CommandLineTools/usr/lib/libLTO.dylib] ==> skip value of -lto_library
+          arg [-dynamic] ==> ignore
+          arg [-arch] ==> ignore
+          arg [x86_64] ==> ignore
+          arg [-platform_version] ==> ignore
+          arg [macos] ==> ignore
+          arg [14.0.0] ==> ignore
+          arg [15.2] ==> ignore
+          arg [-syslibroot] ==> ignore
+          arg [/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk] ==> ignore
+          arg [-mllvm] ==> ignore
+          arg [-enable-linkonceodr-outlining] ==> ignore
+          arg [-o] ==> ignore
+          arg [cmTC_d90a2] ==> ignore
+          arg [-L/usr/local/lib] ==> dir [/usr/local/lib]
+          arg [-search_paths_first] ==> ignore
+          arg [-headerpad_max_install_names] ==> ignore
+          arg [-v] ==> ignore
+          arg [CMakeFiles/cmTC_d90a2.dir/CMakeCXXCompilerABI.cpp.o] ==> ignore
+          arg [-lc++] ==> lib [c++]
+          arg [-lSystem] ==> lib [System]
+          arg [/Library/Developer/CommandLineTools/usr/lib/clang/16/lib/darwin/libclang_rt.osx.a] ==> lib [/Library/Developer/CommandLineTools/usr/lib/clang/16/lib/darwin/libclang_rt.osx.a]
+        linker tool for 'CXX': /Library/Developer/CommandLineTools/usr/bin/ld
+        Library search paths: [;/usr/local/lib;/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib;/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib/swift]
+        Framework search paths: [;/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks]
+        remove lib [System]
+        remove lib [/Library/Developer/CommandLineTools/usr/lib/clang/16/lib/darwin/libclang_rt.osx.a]
+        collapse library dir [/usr/local/lib] ==> [/usr/local/lib]
+        collapse library dir [/usr/local/lib] ==> [/usr/local/lib]
+        collapse library dir [/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib] ==> [/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib]
+        collapse library dir [/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib/swift] ==> [/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib/swift]
+        collapse framework dir [/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks] ==> [/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks]
+        implicit libs: [c++]
+        implicit objs: []
+        implicit dirs: [/usr/local/lib;/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib;/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib/swift]
+        implicit fwks: [/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks]
+      
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/usr/local/share/cmake/Modules/Internal/CMakeDetermineLinkerId.cmake:38 (message)"
+      - "/usr/local/share/cmake/Modules/CMakeDetermineCompilerABI.cmake:299 (cmake_determine_linker_id)"
+      - "/usr/local/share/cmake/Modules/CMakeTestCXXCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:4 (project)"
+    message: |
+      Running the CXX compiler's linker: "/Library/Developer/CommandLineTools/usr/bin/ld" "-v"
+      @(#)PROGRAM:ld PROJECT:ld-1115.7.3
+      BUILD 23:50:35 Dec  5 2024
+      configured to support archs: armv6 armv7 armv7s arm64 arm64e arm64_32 i386 x86_64 x86_64h armv6m armv7k armv7m armv7em
+      will use ld-classic for: armv6 armv7 armv7s i386 armv6m armv7k armv7m armv7em
+      LTO support using: LLVM version 16.0.0 (static support for 29, runtime is 29)
+      TAPI support using: Apple TAPI version 16.0.0 (tapi-1600.0.11.9)
+...

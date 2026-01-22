@@ -13,7 +13,7 @@
 #include "freertos/task.h"
 
 #include "driver/gpio.h"
-#include "driver/rmt_tx.h"
+#include "driver/rmt.h"
 
 #include "esp_nimble_hci.h"
 #include "nimble/nimble_port.h"
@@ -55,8 +55,7 @@ typedef struct {
 } bitstream_t;
 
 static QueueHandle_t message_queue;
-static rmt_channel_handle_t rmt_tx_channel;
-static rmt_encoder_handle_t rmt_encoder;
+static rmt_channel_t rmt_channel = RMT_CHANNEL_0;
 static uint32_t current_capcode = DEFAULT_CAPCODE;
 static uint16_t current_bitrate = DEFAULT_BITRATE;
 static bool alert_enabled = true;
@@ -228,33 +227,25 @@ static esp_err_t play_bits(const uint8_t *bits, size_t nbits, uint16_t bitrate)
     }
 
     uint32_t ticks = RMT_RESOLUTION_HZ / bitrate;
-    if (ticks == 0) {
+    if (ticks == 0 || ticks > 32767) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    rmt_symbol_word_t *symbols = calloc(nbits, sizeof(rmt_symbol_word_t));
-    if (!symbols) {
+    rmt_item32_t *items = calloc(nbits, sizeof(rmt_item32_t));
+    if (!items) {
         return ESP_ERR_NO_MEM;
     }
 
     for (size_t i = 0; i < nbits; i++) {
-        symbols[i].level0 = bits[i] ? 1 : 0;
-        symbols[i].duration0 = ticks;
-        symbols[i].level1 = DATA_OUT_IDLE_LEVEL;
-        symbols[i].duration1 = 0;
+        items[i].level0 = bits[i] ? 1 : 0;
+        items[i].duration0 = ticks;
+        items[i].level1 = DATA_OUT_IDLE_LEVEL;
+        items[i].duration1 = 0;
     }
 
-    rmt_transmit_config_t tx_config = {
-        .loop_count = 0,
-    };
-
-    esp_err_t err = rmt_transmit(rmt_tx_channel, rmt_encoder, symbols, nbits * sizeof(rmt_symbol_word_t), &tx_config);
-    if (err == ESP_OK) {
-        err = rmt_tx_wait_all_done(rmt_tx_channel, portMAX_DELAY);
-    }
-
-    free(symbols);
-    return err;
+    rmt_write_items(rmt_channel, items, nbits, true);
+    free(items);
+    return ESP_OK;
 }
 
 static void play_test_pattern(void)
@@ -521,17 +512,24 @@ static void ble_host_task(void *param)
 
 static esp_err_t init_rmt(void)
 {
-    rmt_tx_channel_config_t tx_chan_config = {
-        .clk_src = RMT_CLK_SRC_DEFAULT,
+    rmt_config_t rmt_config = {
+        .rmt_mode = RMT_MODE_TX,
+        .channel = rmt_channel,
         .gpio_num = GPIO_DATA_OUT,
-        .mem_block_symbols = 256,
-        .resolution_hz = RMT_RESOLUTION_HZ,
-        .trans_queue_depth = 4,
+        .mem_block_num = 1,
+        .clk_div = 80,  // 1 MHz resolution
+        .tx_config = {
+            .loop_en = false,
+            .carrier_freq_hz = 0,
+            .carrier_level = RMT_CARRIER_LEVEL_LOW,
+            .carrier_en = false,
+            .idle_level = DATA_OUT_IDLE_LEVEL,
+            .idle_output_en = true,
+        }
     };
-
-    ESP_RETURN_ON_ERROR(rmt_new_tx_channel(&tx_chan_config, &rmt_tx_channel), TAG, "new tx channel");
-    ESP_RETURN_ON_ERROR(rmt_new_copy_encoder(&rmt_encoder), TAG, "new copy encoder");
-    ESP_RETURN_ON_ERROR(rmt_enable(rmt_tx_channel), TAG, "enable rmt");
+    
+    ESP_RETURN_ON_ERROR(rmt_config(&rmt_config), TAG, "rmt config");
+    ESP_RETURN_ON_ERROR(rmt_driver_install(rmt_channel, 0, 0), TAG, "rmt driver install");
     return ESP_OK;
 }
 
