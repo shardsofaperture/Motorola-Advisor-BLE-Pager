@@ -14,7 +14,7 @@ constexpr const char *kDeviceName = "PagerBridge";
 // Compile-time configuration.
 constexpr int kDataGpio = 2;
 constexpr int kAlertGpio = -1;
-constexpr uint32_t kDefaultCapcode = 123456;
+constexpr uint32_t kDefaultCapcode = 91833;
 constexpr uint32_t kDefaultBaud = 1200;
 constexpr bool kDefaultInvert = true;
 constexpr size_t kPageStoreCapacity = 20;
@@ -42,10 +42,15 @@ struct PageRecord {
   uint32_t capcode = 0;
   String message;
   uint32_t timestampMs = 0;
+  String lastResult;
 
   PageRecord() = default;
-  PageRecord(uint32_t capcodeIn, const String &messageIn, uint32_t timestampMsIn)
-      : capcode(capcodeIn), message(messageIn), timestampMs(timestampMsIn) {}
+  PageRecord(uint32_t capcodeIn, const String &messageIn, uint32_t timestampMsIn,
+             const String &resultIn)
+      : capcode(capcodeIn),
+        message(messageIn),
+        timestampMs(timestampMsIn),
+        lastResult(resultIn) {}
 };
 
 class PageStore {
@@ -79,12 +84,22 @@ class PageStore {
     }
   }
 
-  void add(uint32_t capcode, const String &message, uint32_t timestampMs) {
+  void add(uint32_t capcode, const String &message, uint32_t timestampMs,
+           const String &result) {
     if (pages_.size() == capacity_) {
       pages_.pop_front();
     }
-    pages_.push_back(PageRecord{capcode, message, timestampMs});
+    pages_.push_back(PageRecord{capcode, message, timestampMs, result});
   }
+
+  void updateLatestResult(const String &result) {
+    if (pages_.empty()) {
+      return;
+    }
+    pages_.back().lastResult = result;
+  }
+
+  void clear() { pages_.clear(); }
 
   size_t size() const { return pages_.size(); }
 
@@ -102,7 +117,8 @@ class PageStore {
     lines.reserve(pages_.size());
     size_t idx = 0;
     for (auto it = pages_.rbegin(); it != pages_.rend(); ++it, ++idx) {
-      String line = String("#") + idx + " cap=" + it->capcode + " msg=\"" + it->message + "\"";
+      String line = String("#") + idx + " cap=" + it->capcode + " result=" + it->lastResult +
+                    " ms=" + it->timestampMs + " msg=\"" + it->message + "\"";
       lines.push_back(line);
     }
     return lines;
@@ -110,19 +126,27 @@ class PageStore {
 
  private:
   String serialize(const PageRecord &record) const {
-    String value = String(record.capcode) + "|" + record.timestampMs + "|" + record.message;
+    String value = String(record.capcode) + "|" + record.timestampMs + "|" + record.lastResult +
+                   "|" + record.message;
     return value;
   }
 
   bool deserialize(const String &value, PageRecord &record) const {
     int first = value.indexOf('|');
     int second = value.indexOf('|', first + 1);
+    int third = value.indexOf('|', second + 1);
     if (first < 0 || second < 0) {
       return false;
     }
     record.capcode = value.substring(0, first).toInt();
     record.timestampMs = value.substring(first + 1, second).toInt();
-    record.message = value.substring(second + 1);
+    if (third < 0) {
+      record.lastResult = "UNKNOWN";
+      record.message = value.substring(second + 1);
+    } else {
+      record.lastResult = value.substring(second + 1, third);
+      record.message = value.substring(third + 1);
+    }
     return true;
   }
 
@@ -456,7 +480,7 @@ struct TxRequest {
       : capcode(capcodeIn), message(messageIn), store(storeIn) {}
 };
 
-enum class ProbeMode { kNone, kSequential, kBinary };
+enum class ProbeMode { kNone, kSequential, kBinary, kOneshot };
 
 class ProbeController {
  public:
@@ -510,6 +534,16 @@ class ProbeController {
     sequence_.clear();
   }
 
+  void startOneshot(const std::vector<uint32_t> &caps) {
+    mode_ = ProbeMode::kOneshot;
+    sequence_ = caps;
+    currentIndex_ = 0;
+    preparing_ = true;
+    waitingForAlert_ = false;
+    alertHigh_ = false;
+    nextAllowedMs_ = 0;
+  }
+
   // Probe sends test pages and watches ALERT_GPIO for pager activity.
   void update(std::function<void(uint32_t)> onHit, std::function<void(uint32_t)> onSend) {
     if (mode_ == ProbeMode::kNone) {
@@ -528,8 +562,13 @@ class ProbeController {
       auto bits = encoder_.buildBitstream(cap, "PROBE");
       if (tx_.sendBits(std::move(bits))) {
         onSend(cap);
-        waitingForAlert_ = true;
-        alertStartMs_ = millis();
+        if (mode_ == ProbeMode::kOneshot) {
+          preparing_ = true;
+          nextAllowedMs_ = millis() + kProbeGapMs;
+        } else {
+          waitingForAlert_ = true;
+          alertStartMs_ = millis();
+        }
       }
       preparing_ = false;
       return;
@@ -590,6 +629,12 @@ class ProbeController {
       return cap;
     }
     if (mode_ == ProbeMode::kBinary) {
+      if (currentIndex_ >= sequence_.size()) {
+        return 0xFFFFFFFF;
+      }
+      return sequence_[currentIndex_++];
+    }
+    if (mode_ == ProbeMode::kOneshot) {
       if (currentIndex_ >= sequence_.size()) {
         return 0xFFFFFFFF;
       }
@@ -785,15 +830,27 @@ static std::deque<TxRequest> txQueue;
 static uint32_t configuredCapcode = kDefaultCapcode;
 static uint32_t configuredBaud = kDefaultBaud;
 static bool configuredInvert = kDefaultInvert;
+static bool configuredAutoProbe = false;
+static bool pendingStoredPage = false;
+
+static String serialBuffer;
+
+void emitStatus(const String &message) {
+  statusQueue.push_back(message);
+  if (Serial) {
+    Serial.println(message);
+  }
+}
 
 void queueStatus(const String &message) {
-  statusQueue.push_back(message);
+  emitStatus(message);
 }
 
 void saveSettings() {
   preferences.putUInt("capcode", configuredCapcode);
   preferences.putUInt("baud", configuredBaud);
   preferences.putBool("invert", configuredInvert);
+  preferences.putBool("autoProbe", configuredAutoProbe);
   pageStore.persist(preferences);
 }
 
@@ -830,21 +887,27 @@ void handleCommand(const std::vector<String> &tokens) {
     if (key == "CAPCODE") {
       configuredCapcode = tokens[2].toInt();
       saveSettings();
-      queueStatus("OK CAPCODE");
+      queueStatus("STATUS CAPCODE=" + String(configuredCapcode));
       return;
     }
     if (key == "BAUD") {
       configuredBaud = tokens[2].toInt();
       tx.setBaud(configuredBaud);
       saveSettings();
-      queueStatus("OK BAUD");
+      queueStatus("STATUS BAUD=" + String(configuredBaud));
       return;
     }
     if (key == "INVERT") {
       configuredInvert = tokens[2].toInt() != 0;
       tx.setInvert(configuredInvert);
       saveSettings();
-      queueStatus("OK INVERT");
+      queueStatus("STATUS INVERT=" + String(configuredInvert ? 1 : 0));
+      return;
+    }
+    if (key == "AUTOPROBE") {
+      configuredAutoProbe = tokens[2].toInt() != 0;
+      saveSettings();
+      queueStatus("STATUS AUTOPROBE=" + String(configuredAutoProbe ? 1 : 0));
       return;
     }
   }
@@ -871,6 +934,7 @@ void handleCommand(const std::vector<String> &tokens) {
         message += tokens[i];
       }
       enqueuePage(capcode, message, true);
+      queueStatus("STATUS PAGE QUEUED");
       return;
     }
     String message;
@@ -881,6 +945,7 @@ void handleCommand(const std::vector<String> &tokens) {
       message += tokens[i];
     }
     enqueuePage(configuredCapcode, message, true);
+    queueStatus("STATUS PAGE QUEUED");
     return;
   }
 
@@ -896,18 +961,35 @@ void handleCommand(const std::vector<String> &tokens) {
     size_t index = tokens[1].toInt();
     if (pageStore.getByIndex(index, record)) {
       enqueuePage(record.capcode, record.message, false);
-      queueStatus("OK RESEND");
+      queueStatus("STATUS RESEND QUEUED");
     } else {
-      queueStatus("ERROR RESEND");
+      queueStatus("ERROR RESEND BAD_INDEX");
     }
     return;
   }
 
   if (cmd == "STATUS") {
-    String status = "CAPCODE=" + String(configuredCapcode) +
+    String status = "STATUS CAPCODE=" + String(configuredCapcode) +
                     " BAUD=" + String(configuredBaud) +
-                    " INVERT=" + String(configuredInvert ? 1 : 0);
+                    " INVERT=" + String(configuredInvert ? 1 : 0) +
+                    " DATA_GPIO=" + String(kDataGpio) +
+                    " ALERT_GPIO=" + String(kAlertGpio) +
+                    " AUTOPROBE=" + String(configuredAutoProbe ? 1 : 0) +
+                    " PAGES=" + String(pageStore.size());
     queueStatus(status);
+    return;
+  }
+
+  if (cmd == "SAVE") {
+    saveSettings();
+    queueStatus("STATUS SAVED");
+    return;
+  }
+
+  if (cmd == "CLEAR") {
+    pageStore.clear();
+    saveSettings();
+    queueStatus("STATUS CLEARED");
     return;
   }
 
@@ -916,7 +998,7 @@ void handleCommand(const std::vector<String> &tokens) {
     mode.toUpperCase();
     if (mode == "STOP") {
       probe.stop();
-      queueStatus("OK PROBE STOP");
+      queueStatus("STATUS PROBE STOP");
       return;
     }
     if (mode == "START" && tokens.size() >= 5) {
@@ -924,9 +1006,9 @@ void handleCommand(const std::vector<String> &tokens) {
       uint32_t endCap = tokens[3].toInt();
       uint32_t step = tokens[4].toInt();
       if (probe.startSequential(startCap, endCap, step)) {
-        queueStatus("OK PROBE START");
+        queueStatus("STATUS PROBE START");
       } else {
-        queueStatus("ERROR PROBE");
+        queueStatus("ERROR PROBE NO_ALERT_GPIO");
       }
       return;
     }
@@ -934,10 +1016,26 @@ void handleCommand(const std::vector<String> &tokens) {
       uint32_t startCap = tokens[2].toInt();
       uint32_t endCap = tokens[3].toInt();
       if (probe.startBinary(startCap, endCap)) {
-        queueStatus("OK PROBE BINARY");
+        queueStatus("STATUS PROBE BINARY");
       } else {
-        queueStatus("ERROR PROBE");
+        queueStatus("ERROR PROBE NO_ALERT_GPIO");
       }
+      return;
+    }
+    if (mode == "ONESHOT" && tokens.size() >= 3) {
+      std::vector<uint32_t> caps;
+      for (size_t i = 2; i < tokens.size(); ++i) {
+        uint32_t cap = tokens[i].toInt();
+        if (cap > 0) {
+          caps.push_back(cap);
+        }
+      }
+      if (caps.empty()) {
+        queueStatus("ERROR PROBE ONESHOT EMPTY");
+        return;
+      }
+      probe.startOneshot(caps);
+      queueStatus("STATUS PROBE ONESHOT");
       return;
     }
   }
@@ -970,12 +1068,13 @@ class RxCallbacks final : public NimBLECharacteristicCallbacks {
 void setup() {
   Serial.begin(115200);
   delay(200);
-  Serial.println("Starting BLE PagerBridge (Arduino/NimBLE)...");
+  Serial.println("PagerBridge booting...");
 
   preferences.begin("pager", false);
   configuredCapcode = preferences.getUInt("capcode", kDefaultCapcode);
   configuredBaud = preferences.getUInt("baud", kDefaultBaud);
   configuredInvert = preferences.getBool("invert", kDefaultInvert);
+  configuredAutoProbe = preferences.getBool("autoProbe", false);
   pageStore.load(preferences);
 
   tx.begin(kDataGpio, configuredInvert, configuredBaud);
@@ -1005,12 +1104,30 @@ void setup() {
   advertising->start();
 
   Serial.println("BLE advertising started.");
+  Serial.println("PagerBridge ready.");
+  Serial.println("Settings:");
+  Serial.println("  CAPCODE=" + String(configuredCapcode));
+  Serial.println("  BAUD=" + String(configuredBaud));
+  Serial.println("  INVERT=" + String(configuredInvert ? 1 : 0));
+  Serial.println("  DATA_GPIO=" + String(kDataGpio));
+  Serial.println("  ALERT_GPIO=" + String(kAlertGpio));
+  Serial.println("  AUTOPROBE=" + String(configuredAutoProbe ? 1 : 0));
   queueStatus("READY");
+  if (configuredAutoProbe) {
+    std::vector<uint32_t> caps;
+    caps.push_back(configuredCapcode);
+    probe.startOneshot(caps);
+  }
 }
 
 void loop() {
   if (tx.consumeDoneFlag()) {
     queueStatus("TX_DONE");
+    if (pendingStoredPage) {
+      pageStore.updateLatestResult("TX_DONE");
+      saveSettings();
+      pendingStoredPage = false;
+    }
   }
 
   if (!tx.isBusy() && !txQueue.empty() && !probe.isActive()) {
@@ -1018,10 +1135,10 @@ void loop() {
     txQueue.pop_front();
     auto bits = encoder.buildBitstream(request.capcode, request.message);
     if (tx.sendBits(std::move(bits))) {
-      queueStatus("TX_START");
+      queueStatus("TX_START capcode=" + String(request.capcode));
       if (request.store) {
-        pageStore.add(request.capcode, request.message, millis());
-        saveSettings();
+        pageStore.add(request.capcode, request.message, millis(), "TX_START");
+        pendingStoredPage = true;
       }
     } else {
       queueStatus("ERROR TX_BUSY");
@@ -1033,12 +1150,29 @@ void loop() {
         [](uint32_t capcode) {
           configuredCapcode = capcode;
           saveSettings();
-          queueStatus("PROBE_HIT " + String(capcode));
+          pageStore.add(capcode, "PROBE_HIT capcode=" + String(capcode), millis(), "PROBE_HIT");
+          saveSettings();
+          queueStatus("PROBE_HIT capcode=" + String(capcode));
         },
         [](uint32_t capcode) {
-          (void)capcode;
-          queueStatus("TX_START");
+          queueStatus("PROBE_STEP capcode=" + String(capcode));
+          queueStatus("TX_START capcode=" + String(capcode));
         });
+  }
+
+  while (Serial.available() > 0) {
+    char c = static_cast<char>(Serial.read());
+    if (c == '\r') {
+      continue;
+    }
+    if (c == '\n') {
+      if (serialBuffer.length() > 0) {
+        parser.handleInput(serialBuffer);
+        serialBuffer = "";
+      }
+      continue;
+    }
+    serialBuffer += c;
   }
 
   notifyStatus();
