@@ -25,9 +25,12 @@
 
 #define DEVICE_NAME "PagerBridge"
 
-#define SERVICE_UUID        "7f2b6b48-2d7e-4c35-9e5a-33e8b4e90e1b"
-#define RX_CHAR_UUID        "7f2b6b49-2d7e-4c35-9e5a-33e8b4e90e1b"
-#define STATUS_CHAR_UUID    "7f2b6b4a-2d7e-4c35-9e5a-33e8b4e90e1b"
+#define SERVICE_UUID_BYTES  0x1b, 0x0e, 0xe9, 0xb4, 0xe8, 0x33, 0x5a, 0x9e, \
+                             0x35, 0x4c, 0x7e, 0x2d, 0x48, 0x6b, 0x2b, 0x7f
+#define RX_CHAR_UUID_BYTES  0x1b, 0x0e, 0xe9, 0xb4, 0xe8, 0x33, 0x5a, 0x9e, \
+                             0x35, 0x4c, 0x7e, 0x2d, 0x49, 0x6b, 0x2b, 0x7f
+#define STATUS_UUID_BYTES   0x1b, 0x0e, 0xe9, 0xb4, 0xe8, 0x33, 0x5a, 0x9e, \
+                             0x35, 0x4c, 0x7e, 0x2d, 0x4a, 0x6b, 0x2b, 0x7f
 
 #define GPIO_DATA_OUT       GPIO_NUM_4
 #define DATA_OUT_IDLE_LEVEL 0
@@ -437,16 +440,16 @@ static int gatt_access_cb(uint16_t conn_handle_in, uint16_t attr_handle,
 static const struct ble_gatt_svc_def gatt_svcs[] = {
     {
         .type = BLE_GATT_SVC_TYPE_PRIMARY,
-        .uuid = BLE_UUID128_DECLARE(SERVICE_UUID),
+        .uuid = BLE_UUID128_DECLARE(SERVICE_UUID_BYTES),
         .characteristics = (struct ble_gatt_chr_def[]){
             {
-                .uuid = BLE_UUID128_DECLARE(RX_CHAR_UUID),
+                .uuid = BLE_UUID128_DECLARE(RX_CHAR_UUID_BYTES),
                 .access_cb = gatt_access_cb,
                 .flags = BLE_GATT_CHR_F_WRITE,
                 .val_handle = &gatt_rx_handle,
             },
             {
-                .uuid = BLE_UUID128_DECLARE(STATUS_CHAR_UUID),
+                .uuid = BLE_UUID128_DECLARE(STATUS_UUID_BYTES),
                 .access_cb = gatt_access_cb,
                 .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
                 .val_handle = &gatt_status_handle,
