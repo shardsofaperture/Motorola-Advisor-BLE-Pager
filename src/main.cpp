@@ -1,8 +1,30 @@
 #include <Arduino.h>
 #include <NimBLEDevice.h>
+#include <Preferences.h>
+
+#include <algorithm>
+#include <cctype>
+#include <deque>
+#include <functional>
+#include <vector>
 
 namespace {
 constexpr const char *kDeviceName = "PagerBridge";
+
+// Compile-time configuration.
+constexpr int kDataGpio = 2;
+constexpr int kAlertGpio = -1;
+constexpr uint32_t kDefaultCapcode = 123456;
+constexpr uint32_t kDefaultBaud = 1200;
+constexpr bool kDefaultInvert = true;
+constexpr size_t kPageStoreCapacity = 20;
+constexpr size_t kPersistPageCount = 3;
+constexpr uint32_t kPreambleBits = 576;
+constexpr uint32_t kAlertWindowMs = 2000;
+constexpr uint32_t kProbeGapMs = 500;
+
+constexpr uint32_t kSyncWord = 0x7CD215D8;
+constexpr uint32_t kIdleWord = 0x7A89C197;
 
 static NimBLEServer *bleServer = nullptr;
 static NimBLECharacteristic *rxCharacteristic = nullptr;
@@ -11,6 +33,907 @@ static NimBLECharacteristic *statusCharacteristic = nullptr;
 static const NimBLEUUID kServiceUUID("1b0ee9b4-e833-5a9e-354c-7e2d486b2b7f");
 static const NimBLEUUID kRxUUID("1b0ee9b4-e833-5a9e-354c-7e2d496b2b7f");
 static const NimBLEUUID kStatusUUID("1b0ee9b4-e833-5a9e-354c-7e2d4a6b2b7f");
+
+static Preferences preferences;
+
+static std::deque<String> statusQueue;
+
+struct PageRecord {
+  uint32_t capcode = 0;
+  String message;
+  uint32_t timestampMs = 0;
+};
+
+class PageStore {
+ public:
+  explicit PageStore(size_t capacity) : capacity_(capacity) {}
+
+  void load(Preferences &prefs) {
+    pages_.clear();
+    const size_t stored = prefs.getUInt("pageCount", 0);
+    for (size_t i = 0; i < stored && i < capacity_; ++i) {
+      String key = String("page") + i;
+      String value = prefs.getString(key.c_str(), "");
+      if (value.length() == 0) {
+        continue;
+      }
+      PageRecord record;
+      if (deserialize(value, record)) {
+        pages_.push_back(record);
+      }
+    }
+  }
+
+  void persist(Preferences &prefs) const {
+    size_t stored = std::min(pages_.size(), static_cast<size_t>(kPersistPageCount));
+    prefs.putUInt("pageCount", stored);
+    for (size_t i = 0; i < stored; ++i) {
+      size_t index = pages_.size() - stored + i;
+      const PageRecord &record = pages_[index];
+      String key = String("page") + i;
+      prefs.putString(key.c_str(), serialize(record));
+    }
+  }
+
+  void add(uint32_t capcode, const String &message, uint32_t timestampMs) {
+    if (pages_.size() == capacity_) {
+      pages_.pop_front();
+    }
+    pages_.push_back(PageRecord{capcode, message, timestampMs});
+  }
+
+  size_t size() const { return pages_.size(); }
+
+  bool getByIndex(size_t indexFromNewest, PageRecord &out) const {
+    if (indexFromNewest >= pages_.size()) {
+      return false;
+    }
+    size_t index = pages_.size() - 1 - indexFromNewest;
+    out = pages_[index];
+    return true;
+  }
+
+  std::vector<String> listSummary() const {
+    std::vector<String> lines;
+    lines.reserve(pages_.size());
+    size_t idx = 0;
+    for (auto it = pages_.rbegin(); it != pages_.rend(); ++it, ++idx) {
+      String line = String("#") + idx + " cap=" + it->capcode + " msg=\"" + it->message + "\"";
+      lines.push_back(line);
+    }
+    return lines;
+  }
+
+ private:
+  String serialize(const PageRecord &record) const {
+    String value = String(record.capcode) + "|" + record.timestampMs + "|" + record.message;
+    return value;
+  }
+
+  bool deserialize(const String &value, PageRecord &record) const {
+    int first = value.indexOf('|');
+    int second = value.indexOf('|', first + 1);
+    if (first < 0 || second < 0) {
+      return false;
+    }
+    record.capcode = value.substring(0, first).toInt();
+    record.timestampMs = value.substring(first + 1, second).toInt();
+    record.message = value.substring(second + 1);
+    return true;
+  }
+
+  size_t capacity_ = 0;
+  std::deque<PageRecord> pages_;
+};
+
+class PocsagEncoder {
+ public:
+  std::vector<uint8_t> buildBitstream(uint32_t capcode, const String &message) const {
+    std::vector<uint8_t> bits;
+    bits.reserve(kPreambleBits + 2048);
+
+    appendPreamble(bits);
+
+    std::vector<uint32_t> codewords = buildCodewords(capcode, message);
+    for (uint32_t word : codewords) {
+      appendWord(bits, word);
+    }
+
+    appendWord(bits, kIdleWord);
+    appendWord(bits, kIdleWord);
+    return bits;
+  }
+
+ private:
+  void appendPreamble(std::vector<uint8_t> &bits) const {
+    bits.reserve(bits.size() + kPreambleBits);
+    for (uint32_t i = 0; i < kPreambleBits; ++i) {
+      bits.push_back(static_cast<uint8_t>(i % 2 == 0));
+    }
+  }
+
+  void appendWord(std::vector<uint8_t> &bits, uint32_t word) const {
+    for (int i = 31; i >= 0; --i) {
+      bits.push_back(static_cast<uint8_t>((word >> i) & 0x1));
+    }
+  }
+
+  std::vector<uint32_t> buildCodewords(uint32_t capcode, const String &message) const {
+    std::vector<uint32_t> codewords;
+    std::vector<uint32_t> messageWords = buildMessageWords(message);
+    uint32_t addressWord = buildAddressWord(capcode, 0);
+
+    size_t messageIndex = 0;
+    uint8_t frame = capcode % 8;
+    bool addressInserted = false;
+
+    bool done = false;
+    while (!done) {
+      codewords.push_back(kSyncWord);
+      for (uint8_t frameIndex = 0; frameIndex < 8; ++frameIndex) {
+        for (int slot = 0; slot < 2; ++slot) {
+          if (!addressInserted && frameIndex == frame && slot == 0) {
+            codewords.push_back(addressWord);
+            addressInserted = true;
+            continue;
+          }
+          if (!addressInserted && frameIndex < frame) {
+            codewords.push_back(kIdleWord);
+            continue;
+          }
+          if (messageIndex < messageWords.size()) {
+            codewords.push_back(messageWords[messageIndex++]);
+            continue;
+          }
+          codewords.push_back(kIdleWord);
+        }
+      }
+      if (messageIndex >= messageWords.size()) {
+        done = true;
+      }
+      if (!done) {
+        frame = 0;
+      }
+    }
+    if (codewords.size() == 1) {
+      codewords.push_back(kIdleWord);
+      codewords.push_back(kIdleWord);
+    }
+    return codewords;
+  }
+
+  std::vector<uint32_t> buildMessageWords(const String &message) const {
+    bool numeric = isNumericMessage(message);
+    if (numeric) {
+      return buildNumericWords(message);
+    }
+    return buildAlphaWords(message);
+  }
+
+  bool isNumericMessage(const String &message) const {
+    for (size_t i = 0; i < message.length(); ++i) {
+      char c = message[i];
+      if (isdigit(static_cast<unsigned char>(c))) {
+        continue;
+      }
+      if (c == ' ' || c == '-' || c == '(' || c == ')') {
+        continue;
+      }
+      return false;
+    }
+    return true;
+  }
+
+  std::vector<uint32_t> buildNumericWords(const String &message) const {
+    std::vector<uint8_t> nibbles;
+    nibbles.reserve(message.length());
+    for (size_t i = 0; i < message.length(); ++i) {
+      nibbles.push_back(numericNibble(message[i]));
+    }
+    std::vector<uint32_t> words;
+    size_t index = 0;
+    while (index < nibbles.size()) {
+      uint32_t data = 0;
+      for (int i = 0; i < 5; ++i) {
+        data <<= 4;
+        if (index < nibbles.size()) {
+          data |= (nibbles[index++] & 0xF);
+        }
+      }
+      words.push_back(buildMessageWord(data));
+    }
+    if (words.empty()) {
+      words.push_back(buildMessageWord(0));
+    }
+    return words;
+  }
+
+  uint8_t numericNibble(char c) const {
+    if (c >= '0' && c <= '9') {
+      return static_cast<uint8_t>(c - '0');
+    }
+    switch (c) {
+      case ' ':
+        return 0xA;
+      case '-':
+        return 0xB;
+      case '(':
+        return 0xC;
+      case ')':
+        return 0xD;
+      default:
+        return 0xA;
+    }
+  }
+
+  std::vector<uint32_t> buildAlphaWords(const String &message) const {
+    std::vector<uint8_t> bits;
+    bits.reserve(message.length() * 7);
+    for (size_t i = 0; i < message.length(); ++i) {
+      uint8_t value = static_cast<uint8_t>(message[i]) & 0x7F;
+      for (int b = 6; b >= 0; --b) {
+        bits.push_back(static_cast<uint8_t>((value >> b) & 0x1));
+      }
+    }
+    std::vector<uint32_t> words;
+    size_t index = 0;
+    while (index < bits.size()) {
+      uint32_t data = 0;
+      for (int i = 0; i < 20; ++i) {
+        data <<= 1;
+        if (index < bits.size()) {
+          data |= bits[index++];
+        }
+      }
+      words.push_back(buildMessageWord(data));
+    }
+    if (words.empty()) {
+      words.push_back(buildMessageWord(0));
+    }
+    return words;
+  }
+
+  uint32_t buildAddressWord(uint32_t capcode, uint8_t functionBits) const {
+    uint32_t address = capcode / 8;
+    uint32_t data = (address & 0x3FFFF) << 2;
+    data |= (functionBits & 0x3);
+    uint32_t cw = buildCodeword(0, data);
+    return cw;
+  }
+
+  uint32_t buildMessageWord(uint32_t data20) const {
+    return buildCodeword(1, data20 & 0xFFFFF);
+  }
+
+  uint32_t buildCodeword(uint8_t typeBit, uint32_t data) const {
+    uint32_t data21 = (static_cast<uint32_t>(typeBit) << 20) | (data & 0xFFFFF);
+    uint32_t bch = bchEncode(data21);
+    uint32_t word = (data21 << 11) | (bch << 1);
+    uint32_t parity = computeParity(word);
+    return word | parity;
+  }
+
+  uint32_t bchEncode(uint32_t data21) const {
+    uint32_t reg = data21 << 10;
+    constexpr uint32_t poly = 0x3B9;
+    for (int i = 31; i >= 10; --i) {
+      if (reg & (1u << i)) {
+        reg ^= (poly << (i - 10));
+      }
+    }
+    return reg & 0x3FF;
+  }
+
+  uint32_t computeParity(uint32_t value) const {
+    uint32_t parity = 0;
+    uint32_t temp = value;
+    while (temp) {
+      parity ^= (temp & 1u);
+      temp >>= 1;
+    }
+    return parity & 0x1;
+  }
+};
+
+class PocsagTx {
+ public:
+  PocsagTx() = default;
+
+  void begin(int dataPin, bool invert, uint32_t baud) {
+    instance_ = this;
+    dataPin_ = dataPin;
+    invert_ = invert;
+    pinMode(dataPin_, INPUT);
+    timer_ = timerBegin(0, 80, true);
+    timerAttachInterrupt(timer_, &PocsagTx::onTimer, true);
+    setBaud(baud);
+    idleLine();
+  }
+
+  void setBaud(uint32_t baud) {
+    baud_ = baud;
+    if (timer_ != nullptr) {
+      timerAlarmDisable(timer_);
+      timerAlarmWrite(timer_, 1000000 / baud_, true);
+    }
+  }
+
+  void setInvert(bool invert) {
+    invert_ = invert;
+    idleLine();
+  }
+
+  bool isBusy() const { return sending_; }
+
+  bool sendBits(std::vector<uint8_t> &&bits) {
+    if (sending_ || bits.empty()) {
+      return false;
+    }
+    bits_ = std::move(bits);
+    bitIndex_ = 0;
+    sending_ = true;
+    timerAlarmWrite(timer_, 1000000 / baud_, true);
+    timerAlarmEnable(timer_);
+    return true;
+  }
+
+  bool consumeDoneFlag() {
+    if (doneFlag_) {
+      doneFlag_ = false;
+      return true;
+    }
+    return false;
+  }
+
+ private:
+  static void IRAM_ATTR onTimer() {
+    instance_->handleTimer();
+  }
+
+  void IRAM_ATTR handleTimer() {
+    if (!sending_) {
+      return;
+    }
+    if (bitIndex_ >= bits_.size()) {
+      timerAlarmDisable(timer_);
+      sending_ = false;
+      doneFlag_ = true;
+      idleLine();
+      return;
+    }
+    uint8_t bit = bits_[bitIndex_++];
+    driveBit(bit);
+  }
+
+  void driveBit(uint8_t bit) {
+    bool level = bit != 0;
+    if (invert_) {
+      level = !level;
+    }
+    if (level) {
+      pinMode(dataPin_, INPUT);
+    } else {
+      pinMode(dataPin_, OUTPUT);
+      digitalWrite(dataPin_, LOW);
+    }
+  }
+
+  void idleLine() {
+    // Open-drain emulation: release line (INPUT) for idle-high, drive LOW otherwise.
+    bool idleHigh = !invert_;
+    if (idleHigh) {
+      pinMode(dataPin_, INPUT);
+    } else {
+      pinMode(dataPin_, OUTPUT);
+      digitalWrite(dataPin_, LOW);
+    }
+  }
+
+  static PocsagTx *instance_;
+  int dataPin_ = -1;
+  bool invert_ = false;
+  uint32_t baud_ = 1200;
+  hw_timer_t *timer_ = nullptr;
+  volatile bool sending_ = false;
+  volatile bool doneFlag_ = false;
+  volatile size_t bitIndex_ = 0;
+  std::vector<uint8_t> bits_;
+};
+
+PocsagTx *PocsagTx::instance_ = nullptr;
+
+struct TxRequest {
+  uint32_t capcode = 0;
+  String message;
+  bool store = true;
+};
+
+enum class ProbeMode { kNone, kSequential, kBinary };
+
+class ProbeController {
+ public:
+  ProbeController(PocsagTx &tx, const PocsagEncoder &encoder)
+      : tx_(tx), encoder_(encoder) {}
+
+  void begin(int alertPin) {
+    alertPin_ = alertPin;
+    if (alertPin_ >= 0) {
+      pinMode(alertPin_, INPUT);
+    }
+  }
+
+  bool startSequential(uint32_t startCap, uint32_t endCap, uint32_t step) {
+    if (alertPin_ < 0) {
+      return false;
+    }
+    mode_ = ProbeMode::kSequential;
+    startCap_ = startCap;
+    endCap_ = endCap;
+    step_ = std::max<uint32_t>(step, 1);
+    currentCap_ = startCap_;
+    sequence_.clear();
+    preparing_ = true;
+    waitingForAlert_ = false;
+    alertHigh_ = false;
+    nextAllowedMs_ = 0;
+    return true;
+  }
+
+  bool startBinary(uint32_t startCap, uint32_t endCap) {
+    if (alertPin_ < 0) {
+      return false;
+    }
+    mode_ = ProbeMode::kBinary;
+    startCap_ = startCap;
+    endCap_ = endCap;
+    buildBinarySequence();
+    currentIndex_ = 0;
+    preparing_ = true;
+    waitingForAlert_ = false;
+    alertHigh_ = false;
+    nextAllowedMs_ = 0;
+    return true;
+  }
+
+  void stop() {
+    mode_ = ProbeMode::kNone;
+    preparing_ = false;
+    waitingForAlert_ = false;
+    sequence_.clear();
+  }
+
+  // Probe sends test pages and watches ALERT_GPIO for pager activity.
+  void update(std::function<void(uint32_t)> onHit, std::function<void(uint32_t)> onSend) {
+    if (mode_ == ProbeMode::kNone) {
+      return;
+    }
+    if (!waitingForAlert_ && preparing_ && !tx_.isBusy()) {
+      if (!readyForNext()) {
+        return;
+      }
+      uint32_t cap = nextCap();
+      if (cap == 0xFFFFFFFF) {
+        stop();
+        return;
+      }
+      activeCap_ = cap;
+      auto bits = encoder_.buildBitstream(cap, "PROBE");
+      if (tx_.sendBits(std::move(bits))) {
+        onSend(cap);
+        waitingForAlert_ = true;
+        alertStartMs_ = millis();
+      }
+      preparing_ = false;
+      return;
+    }
+
+    if (waitingForAlert_) {
+      if (alertDetected()) {
+        stop();
+        onHit(activeCap_);
+        return;
+      }
+      if (millis() - alertStartMs_ > kAlertWindowMs) {
+        waitingForAlert_ = false;
+        preparing_ = true;
+        nextAllowedMs_ = millis() + kProbeGapMs;
+      }
+    }
+  }
+
+  bool readyForNext() const { return millis() >= nextAllowedMs_; }
+
+  bool isActive() const { return mode_ != ProbeMode::kNone; }
+
+ private:
+  void buildBinarySequence() {
+    sequence_.clear();
+    if (startCap_ > endCap_) {
+      std::swap(startCap_, endCap_);
+    }
+    std::vector<std::pair<uint32_t, uint32_t>> stack;
+    stack.push_back({startCap_, endCap_});
+    while (!stack.empty()) {
+      auto [start, end] = stack.back();
+      stack.pop_back();
+      if (start > end) {
+        continue;
+      }
+      uint32_t mid = start + (end - start) / 2;
+      sequence_.push_back(mid);
+      if (mid > start) {
+        stack.push_back({start, mid - 1});
+      }
+      if (mid < end) {
+        stack.push_back({mid + 1, end});
+      }
+    }
+  }
+
+  uint32_t nextCap() {
+    if (mode_ == ProbeMode::kSequential) {
+      if (currentCap_ > endCap_) {
+        return 0xFFFFFFFF;
+      }
+      uint32_t cap = currentCap_;
+      currentCap_ += step_;
+      return cap;
+    }
+    if (mode_ == ProbeMode::kBinary) {
+      if (currentIndex_ >= sequence_.size()) {
+        return 0xFFFFFFFF;
+      }
+      return sequence_[currentIndex_++];
+    }
+    return 0xFFFFFFFF;
+  }
+
+  bool alertDetected() {
+    if (alertPin_ < 0) {
+      return false;
+    }
+    int value = digitalRead(alertPin_);
+    if (value == HIGH) {
+      if (!alertHigh_) {
+        alertHigh_ = true;
+        alertHighStartMs_ = millis();
+      }
+      if (millis() - alertHighStartMs_ > 50) {
+        return true;
+      }
+    } else {
+      alertHigh_ = false;
+    }
+    return false;
+  }
+
+  PocsagTx &tx_;
+  const PocsagEncoder &encoder_;
+  int alertPin_ = -1;
+  ProbeMode mode_ = ProbeMode::kNone;
+  uint32_t startCap_ = 0;
+  uint32_t endCap_ = 0;
+  uint32_t step_ = 1;
+  uint32_t currentCap_ = 0;
+  uint32_t activeCap_ = 0;
+  std::vector<uint32_t> sequence_;
+  size_t currentIndex_ = 0;
+  bool preparing_ = false;
+  bool waitingForAlert_ = false;
+  bool alertHigh_ = false;
+  uint32_t alertHighStartMs_ = 0;
+  uint32_t alertStartMs_ = 0;
+  uint32_t nextAllowedMs_ = 0;
+};
+
+class CommandParser {
+ public:
+  using Handler = std::function<void(const std::vector<String> &)>;
+
+  void setHandler(Handler handler) { handler_ = std::move(handler); }
+
+  void handleInput(const String &input) {
+    int start = 0;
+    while (start < input.length()) {
+      int end = input.indexOf('\n', start);
+      if (end < 0) {
+        end = input.length();
+      }
+      String line = input.substring(start, end);
+      line.trim();
+      if (line.length() > 0) {
+        parseLine(line);
+      }
+      start = end + 1;
+    }
+  }
+
+ private:
+  void parseLine(const String &line) {
+    if (line.startsWith("{")) {
+      String cmdLine = parseJson(line);
+      if (cmdLine.length() > 0) {
+        parseLine(cmdLine);
+      }
+      return;
+    }
+
+    std::vector<String> tokens;
+    splitTokens(line, tokens);
+    if (!tokens.empty() && handler_) {
+      handler_(tokens);
+    }
+  }
+
+  String parseJson(const String &line) {
+    String cmd = getJsonString(line, "cmd");
+    if (cmd.length() == 0) {
+      cmd = getJsonString(line, "command");
+    }
+    cmd.toUpperCase();
+    if (cmd.length() == 0) {
+      return "";
+    }
+    if (cmd == "PAGE") {
+      String cap = getJsonString(line, "capcode");
+      String text = getJsonString(line, "text");
+      if (cap.length() > 0) {
+        return cmd + " " + cap + " " + text;
+      }
+      return cmd + " " + text;
+    }
+    if (cmd == "SET") {
+      String key = getJsonString(line, "key");
+      String value = getJsonString(line, "value");
+      if (key.length() > 0 && value.length() > 0) {
+        return cmd + " " + key + " " + value;
+      }
+    }
+    if (cmd == "PROBE") {
+      String mode = getJsonString(line, "mode");
+      mode.toUpperCase();
+      if (mode.length() > 0) {
+        String start = getJsonString(line, "startCap");
+        String end = getJsonString(line, "endCap");
+        String step = getJsonString(line, "step");
+        if (mode == "START" && step.length() > 0) {
+          return cmd + " START " + start + " " + end + " " + step;
+        }
+        if (mode == "BINARY") {
+          return cmd + " BINARY " + start + " " + end;
+        }
+      }
+    }
+    return cmd;
+  }
+
+  String getJsonString(const String &line, const char *key) {
+    String pattern = String("\"") + key + "\"";
+    int keyIndex = line.indexOf(pattern);
+    if (keyIndex < 0) {
+      return "";
+    }
+    int colon = line.indexOf(':', keyIndex + pattern.length());
+    if (colon < 0) {
+      return "";
+    }
+    int start = colon + 1;
+    while (start < line.length() && isspace(static_cast<unsigned char>(line[start]))) {
+      ++start;
+    }
+    if (start >= line.length()) {
+      return "";
+    }
+    if (line[start] == '"') {
+      int end = line.indexOf('"', start + 1);
+      if (end < 0) {
+        return "";
+      }
+      return line.substring(start + 1, end);
+    }
+    int end = start;
+    while (end < line.length() && line[end] != ',' && line[end] != '}' &&
+           !isspace(static_cast<unsigned char>(line[end]))) {
+      ++end;
+    }
+    return line.substring(start, end);
+  }
+
+  void splitTokens(const String &line, std::vector<String> &tokens) {
+    bool inQuotes = false;
+    String current;
+    for (size_t i = 0; i < line.length(); ++i) {
+      char c = line[i];
+      if (c == '"') {
+        inQuotes = !inQuotes;
+        continue;
+      }
+      if (!inQuotes && isspace(static_cast<unsigned char>(c))) {
+        if (current.length() > 0) {
+          tokens.push_back(current);
+          current.clear();
+        }
+        continue;
+      }
+      current += c;
+    }
+    if (current.length() > 0) {
+      tokens.push_back(current);
+    }
+  }
+
+  Handler handler_;
+};
+
+static PocsagEncoder encoder;
+static PocsagTx tx;
+static PageStore pageStore(kPageStoreCapacity);
+static ProbeController probe(tx, encoder);
+static CommandParser parser;
+
+static std::deque<TxRequest> txQueue;
+static uint32_t configuredCapcode = kDefaultCapcode;
+static uint32_t configuredBaud = kDefaultBaud;
+static bool configuredInvert = kDefaultInvert;
+
+void queueStatus(const String &message) {
+  statusQueue.push_back(message);
+}
+
+void saveSettings() {
+  preferences.putUInt("capcode", configuredCapcode);
+  preferences.putUInt("baud", configuredBaud);
+  preferences.putBool("invert", configuredInvert);
+  pageStore.persist(preferences);
+}
+
+void notifyStatus() {
+  if (statusCharacteristic == nullptr) {
+    return;
+  }
+  if (statusQueue.empty()) {
+    return;
+  }
+  if (statusCharacteristic->getSubscribedCount() == 0) {
+    statusQueue.clear();
+    return;
+  }
+  String message = statusQueue.front();
+  statusQueue.pop_front();
+  statusCharacteristic->setValue(message.c_str());
+  statusCharacteristic->notify();
+}
+
+void enqueuePage(uint32_t capcode, const String &message, bool store) {
+  txQueue.push_back(TxRequest{capcode, message, store});
+}
+
+void handleCommand(const std::vector<String> &tokens) {
+  if (tokens.empty()) {
+    return;
+  }
+  String cmd = tokens[0];
+  cmd.toUpperCase();
+  if (cmd == "SET" && tokens.size() >= 3) {
+    String key = tokens[1];
+    key.toUpperCase();
+    if (key == "CAPCODE") {
+      configuredCapcode = tokens[2].toInt();
+      saveSettings();
+      queueStatus("OK CAPCODE");
+      return;
+    }
+    if (key == "BAUD") {
+      configuredBaud = tokens[2].toInt();
+      tx.setBaud(configuredBaud);
+      saveSettings();
+      queueStatus("OK BAUD");
+      return;
+    }
+    if (key == "INVERT") {
+      configuredInvert = tokens[2].toInt() != 0;
+      tx.setInvert(configuredInvert);
+      saveSettings();
+      queueStatus("OK INVERT");
+      return;
+    }
+  }
+
+  if (cmd == "PAGE" && tokens.size() >= 2) {
+    auto isNumber = [](const String &value) {
+      if (value.length() == 0) {
+        return false;
+      }
+      for (size_t i = 0; i < value.length(); ++i) {
+        if (!isdigit(static_cast<unsigned char>(value[i]))) {
+          return false;
+        }
+      }
+      return true;
+    };
+    if (tokens.size() >= 3 && isNumber(tokens[1])) {
+      uint32_t capcode = tokens[1].toInt();
+      String message;
+      for (size_t i = 2; i < tokens.size(); ++i) {
+        if (i > 2) {
+          message += " ";
+        }
+        message += tokens[i];
+      }
+      enqueuePage(capcode, message, true);
+      return;
+    }
+    String message;
+    for (size_t i = 1; i < tokens.size(); ++i) {
+      if (i > 1) {
+        message += " ";
+      }
+      message += tokens[i];
+    }
+    enqueuePage(configuredCapcode, message, true);
+    return;
+  }
+
+  if (cmd == "LIST") {
+    for (const auto &line : pageStore.listSummary()) {
+      queueStatus(line);
+    }
+    return;
+  }
+
+  if (cmd == "RESEND" && tokens.size() >= 2) {
+    PageRecord record;
+    size_t index = tokens[1].toInt();
+    if (pageStore.getByIndex(index, record)) {
+      enqueuePage(record.capcode, record.message, false);
+      queueStatus("OK RESEND");
+    } else {
+      queueStatus("ERROR RESEND");
+    }
+    return;
+  }
+
+  if (cmd == "STATUS") {
+    String status = "CAPCODE=" + String(configuredCapcode) +
+                    " BAUD=" + String(configuredBaud) +
+                    " INVERT=" + String(configuredInvert ? 1 : 0);
+    queueStatus(status);
+    return;
+  }
+
+  if (cmd == "PROBE" && tokens.size() >= 2) {
+    String mode = tokens[1];
+    mode.toUpperCase();
+    if (mode == "STOP") {
+      probe.stop();
+      queueStatus("OK PROBE STOP");
+      return;
+    }
+    if (mode == "START" && tokens.size() >= 5) {
+      uint32_t startCap = tokens[2].toInt();
+      uint32_t endCap = tokens[3].toInt();
+      uint32_t step = tokens[4].toInt();
+      if (probe.startSequential(startCap, endCap, step)) {
+        queueStatus("OK PROBE START");
+      } else {
+        queueStatus("ERROR PROBE");
+      }
+      return;
+    }
+    if (mode == "BINARY" && tokens.size() >= 4) {
+      uint32_t startCap = tokens[2].toInt();
+      uint32_t endCap = tokens[3].toInt();
+      if (probe.startBinary(startCap, endCap)) {
+        queueStatus("OK PROBE BINARY");
+      } else {
+        queueStatus("ERROR PROBE");
+      }
+      return;
+    }
+  }
+
+  queueStatus("ERROR UNKNOWN_CMD");
+}
 
 class ServerCallbacks final : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer *server) override {
@@ -28,12 +951,8 @@ class ServerCallbacks final : public NimBLEServerCallbacks {
 class RxCallbacks final : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic *characteristic) override {
     std::string value = characteristic->getValue();
-    Serial.printf("RX: %s\n", value.c_str());
-
-    if (statusCharacteristic != nullptr) {
-      statusCharacteristic->setValue("OK");
-      statusCharacteristic->notify();
-    }
+    String input(value.c_str());
+    parser.handleInput(input);
   }
 };
 }  // namespace
@@ -43,6 +962,17 @@ void setup() {
   delay(200);
   Serial.println("Starting BLE PagerBridge (Arduino/NimBLE)...");
 
+  preferences.begin("pager", false);
+  configuredCapcode = preferences.getUInt("capcode", kDefaultCapcode);
+  configuredBaud = preferences.getUInt("baud", kDefaultBaud);
+  configuredInvert = preferences.getBool("invert", kDefaultInvert);
+  pageStore.load(preferences);
+
+  tx.begin(kDataGpio, configuredInvert, configuredBaud);
+  probe.begin(kAlertGpio);
+
+  parser.setHandler(handleCommand);
+
   NimBLEDevice::init(kDeviceName);
   NimBLEDevice::setPower(ESP_PWR_LVL_P9);
 
@@ -50,8 +980,7 @@ void setup() {
   bleServer->setCallbacks(new ServerCallbacks());
 
   NimBLEService *service = bleServer->createService(kServiceUUID);
-  rxCharacteristic = service->createCharacteristic(
-      kRxUUID, NIMBLE_PROPERTY::WRITE);
+  rxCharacteristic = service->createCharacteristic(kRxUUID, NIMBLE_PROPERTY::WRITE);
   rxCharacteristic->setCallbacks(new RxCallbacks());
 
   statusCharacteristic = service->createCharacteristic(
@@ -66,14 +995,42 @@ void setup() {
   advertising->start();
 
   Serial.println("BLE advertising started.");
+  queueStatus("READY");
 }
 
 void loop() {
-  static uint32_t lastLogMs = 0;
-  const uint32_t now = millis();
-  if (now - lastLogMs >= 5000) {
-    lastLogMs = now;
-    Serial.println("Heartbeat: waiting for BLE writes...");
+  if (tx.consumeDoneFlag()) {
+    queueStatus("TX_DONE");
   }
-  delay(10);
+
+  if (!tx.isBusy() && !txQueue.empty() && !probe.isActive()) {
+    TxRequest request = txQueue.front();
+    txQueue.pop_front();
+    auto bits = encoder.buildBitstream(request.capcode, request.message);
+    if (tx.sendBits(std::move(bits))) {
+      queueStatus("TX_START");
+      if (request.store) {
+        pageStore.add(request.capcode, request.message, millis());
+        saveSettings();
+      }
+    } else {
+      queueStatus("ERROR TX_BUSY");
+    }
+  }
+
+  if (probe.isActive()) {
+    probe.update(
+        [](uint32_t capcode) {
+          configuredCapcode = capcode;
+          saveSettings();
+          queueStatus("PROBE_HIT " + String(capcode));
+        },
+        [](uint32_t capcode) {
+          (void)capcode;
+          queueStatus("TX_START");
+        });
+  }
+
+  notifyStatus();
+  delay(5);
 }
