@@ -13,20 +13,22 @@ static const NimBLEUUID kRxUUID("1b0ee9b4-e833-5a9e-354c-7e2d496b2b7f");
 static const NimBLEUUID kStatusUUID("1b0ee9b4-e833-5a9e-354c-7e2d4a6b2b7f");
 
 class ServerCallbacks final : public NimBLEServerCallbacks {
-  void onConnect(NimBLEServer *server, NimBLEConnInfo &connInfo) override {
-    Serial.printf("BLE connected: %s\n", connInfo.getAddress().toString().c_str());
+  void onConnect(NimBLEServer *server) override {
+    (void)server;
+    Serial.println("BLE connected.");
   }
 
-  void onDisconnect(NimBLEServer *server, NimBLEConnInfo &connInfo, int reason) override {
-    Serial.printf("BLE disconnected: %s reason=%d\n", connInfo.getAddress().toString().c_str(), reason);
+  void onDisconnect(NimBLEServer *server) override {
+    (void)server;
+    Serial.println("BLE disconnected.");
     NimBLEDevice::startAdvertising();
   }
 };
 
 class RxCallbacks final : public NimBLECharacteristicCallbacks {
-  void onWrite(NimBLECharacteristic *characteristic, NimBLEConnInfo &connInfo) override {
+  void onWrite(NimBLECharacteristic *characteristic) override {
     std::string value = characteristic->getValue();
-    Serial.printf("RX from %s: %s\n", connInfo.getAddress().toString().c_str(), value.c_str());
+    Serial.printf("RX: %s\n", value.c_str());
 
     if (statusCharacteristic != nullptr) {
       statusCharacteristic->setValue("OK");
