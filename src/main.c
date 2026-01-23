@@ -8,6 +8,7 @@
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
+#include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
@@ -527,6 +528,12 @@ static esp_err_t init_rmt(void)
             .idle_output_en = true,
         }
     };
+    esp_err_t nvs_err = nvs_flash_init();
+    if (nvs_err == ESP_ERR_NVS_NO_FREE_PAGES || nvs_err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        nvs_err = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(nvs_err);
     
     ESP_RETURN_ON_ERROR(rmt_config(&rmt_config), TAG, "rmt config");
     ESP_RETURN_ON_ERROR(rmt_driver_install(rmt_channel, 0, 0), TAG, "rmt driver install");
