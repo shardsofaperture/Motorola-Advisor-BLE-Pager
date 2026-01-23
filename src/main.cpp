@@ -562,8 +562,10 @@ class ProbeController {
     std::vector<std::pair<uint32_t, uint32_t>> stack;
     stack.push_back({startCap_, endCap_});
     while (!stack.empty()) {
-      auto [start, end] = stack.back();
+      std::pair<uint32_t, uint32_t> range = stack.back();
       stack.pop_back();
+      uint32_t start = range.first;
+      uint32_t end = range.second;
       if (start > end) {
         continue;
       }
