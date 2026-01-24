@@ -12,18 +12,43 @@ This project turns a Seeed XIAO ESP32-S3 into a BLE/Serial bridge that injects a
   - **Best practice:** isolate the TA31142 output by **lifting pin 15** or **cutting the trace**, then inject on the **downstream side** toward the logic board.
 
 ### Drive style
-By default the firmware drives **push-pull** for TA31142 injection:
-- **Logic 1 / idle**: GPIO3 driven **HIGH**
-- **Logic 0**: GPIO3 driven **LOW**
-
-You can also choose **open-drain** if you need to share a line:
+By default the firmware drives **open-drain** for TA31142 injection:
 - **Logic 1 / idle**: GPIO3 set to **INPUT (hi-Z)**
 - **Logic 0**: GPIO3 driven **OUTPUT LOW**
+
+You can also choose **push-pull** if you need it:
+- **Logic 1 / idle**: GPIO3 driven **HIGH**
+- **Logic 0**: GPIO3 driven **LOW**
 
 ### Optional (for automatic probe/hit detection)
 If you want PROBE auto-detect to work, wire the pager’s alert indication to **ALERT_GPIO** (see `kAlertGpio` in `src/main.cpp`):
 - Suggested sources: **buzzer drive** line or **LED/backlight** line.
 - Use a simple conditioning network if needed (e.g., resistor divider or transistor) to make a clean 3.3 V logic signal.
+
+## Advisor II bring-up (RF board installed, data isolated)
+When the RF board is installed for battery-save wake, keep the RF hardware present but **isolate the data path** so the ESP32 is the only driver of TSP2.
+
+**Wiring checklist**
+- Keep the **RF board installed** so the pager stays awake.
+- **Disconnect** the RF data net: **RF chip pin 15 → header pin 3 → TSP2** (cut trace or lift pin).
+- Inject the ESP32 DATA output into **TSP2** through a **1k series resistor**.
+- Share **common ground** between the ESP32 and pager logic board.
+
+**Command checklist**
+- Use **open-drain** mode:
+  ```
+  SET OUTPUT OPEN_DRAIN
+  ```
+- Send a minimal bring-up page first:
+  ```
+  SEND_MIN <capcode> <function 0-3>
+  ```
+- If there’s no response, toggle polarity and retry:
+  ```
+  SET INVERT 1
+  SEND_MIN <capcode> <function 0-3>
+  ```
+- `TEST CARRIER` is **only for scope timing** (not for alerting).
 
 ## Build & flash (PlatformIO)
 1. Install **PlatformIO** in VS Code.
@@ -93,6 +118,18 @@ SET INVERT 1
 ### SET OUTPUT <PUSH_PULL|OPEN_DRAIN>
 ```
 SET OUTPUT PUSH_PULL
+```
+
+### SET_GPIO <pin>
+Change the DATA GPIO (re-initializes the transmitter).
+```
+SET_GPIO 3
+```
+
+### SET_IDLE <0|1>
+Set idle polarity (1 = idle high, 0 = idle low).
+```
+SET_IDLE 1
 ```
 
 ### SET AUTOPROBE <0|1>
@@ -168,6 +205,18 @@ Inject already-encoded 32-bit codewords (useful for bring-up).
 SEND_CODEWORDS 0x7CD215D8 0x12345678 0x7A89C197
 ```
 
+### SEND_MIN <capcode> <function 0-3>
+Send a 2-second alternating preamble followed by a single batch (sync + address + idle).
+```
+SEND_MIN 123456 0
+```
+
+### SEND_SYNC
+Send a preamble + sync + short idle for scope verification.
+```
+SEND_SYNC
+```
+
 ### LIST
 List stored pages (newest first). Output is chunked into status notifications and also printed to Serial.
 ```
@@ -233,7 +282,7 @@ SAVE
 ## Recommended settings (Advisor II TA31142 injection)
 - **BAUD:** 512  
 - **INVERT:** 0  
-- **OUTPUT:** PUSH_PULL  
+- **OUTPUT:** OPEN_DRAIN  
 - **CAPCODES:** 123456 (individual) / 123457 (group)
 
 ## Injecting into logic board (no RF board)
