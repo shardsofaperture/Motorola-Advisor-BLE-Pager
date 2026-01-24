@@ -521,11 +521,6 @@ class PocsagTx {
   }
 
   void applyLineLevel(bool level) {
-    if (outputMode_ == OutputMode::kPushPull) {
-      pinMode(dataPin_, OUTPUT);
-      digitalWrite(dataPin_, level ? HIGH : LOW);
-      return;
-    }
     if (level) {
       pinMode(dataPin_, INPUT);
       return;
@@ -988,8 +983,8 @@ void enqueueRawBits(std::vector<uint8_t> &&bits, const String &label) {
   txQueue.push_back(TxRequest{std::move(bits), label});
 }
 
-std::vector<uint8_t> buildAlternatingBits(uint32_t durationMs) {
-  uint64_t bitCount = (static_cast<uint64_t>(configuredBaud) * durationMs) / 1000;
+std::vector<uint8_t> buildAlternatingBitsForBaud(uint32_t durationMs, uint32_t baud) {
+  uint64_t bitCount = (static_cast<uint64_t>(baud) * durationMs) / 1000;
   if (bitCount == 0) {
     bitCount = 1;
   }
@@ -999,6 +994,10 @@ std::vector<uint8_t> buildAlternatingBits(uint32_t durationMs) {
     bits.push_back(static_cast<uint8_t>((i % 2) == 0));
   }
   return bits;
+}
+
+std::vector<uint8_t> buildAlternatingBits(uint32_t durationMs) {
+  return buildAlternatingBitsForBaud(durationMs, configuredBaud);
 }
 
 std::vector<uint8_t> buildTestPattern(uint32_t capcode, uint8_t functionBits,
@@ -1118,6 +1117,12 @@ void handleCommand(const std::vector<String> &tokens) {
     queueStatus("STATUS TEST QUEUED");
     return;
   }
+  if (cmd == "DEBUG_SCOPE") {
+    std::vector<uint8_t> bits = buildAlternatingBits(2000);
+    enqueueRawBits(std::move(bits), "DEBUG_SCOPE");
+    queueStatus("STATUS DEBUG_SCOPE QUEUED");
+    return;
+  }
   if (cmd == "SEND_MIN" && tokens.size() >= 3) {
     uint32_t capcode = 0;
     uint8_t functionBits = 0;
@@ -1125,7 +1130,7 @@ void handleCommand(const std::vector<String> &tokens) {
       queueStatus("ERROR SEND_MIN INVALID");
       return;
     }
-    std::vector<uint8_t> bits = buildAlternatingBits(2000);
+    std::vector<uint8_t> bits = buildAlternatingBitsForBaud(2000, 512);
     std::vector<uint32_t> batch = encoder.buildSingleBatchCodewords(capcode, functionBits, nullptr);
     std::vector<uint8_t> batchBits = encoder.buildBitstreamFromCodewords(batch, false);
     bits.insert(bits.end(), batchBits.begin(), batchBits.end());
