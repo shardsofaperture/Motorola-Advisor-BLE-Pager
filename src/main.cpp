@@ -19,7 +19,7 @@ constexpr uint32_t kDefaultCapcodeInd = 123456;
 constexpr uint32_t kDefaultCapcodeGrp = 123457;
 constexpr uint32_t kDefaultBaud = 512;
 constexpr bool kDefaultInvert = false;
-constexpr bool kIdleLineHigh = true;
+constexpr bool kDefaultIdleLineHigh = true;
 constexpr uint32_t kPocsagBatchWordCount = 17;
 constexpr size_t kPageStoreCapacity = 20;
 constexpr size_t kPersistPageCount = 3;
@@ -29,13 +29,6 @@ constexpr uint32_t kProbeGapMs = 500;
 
 constexpr uint32_t kSyncWord = 0x7CD215D8;
 constexpr uint32_t kIdleWord = 0x7A89C197;
-
-// Compile-time output mode selection.
-#define MODE_OPENDRAIN 0
-#define MODE_PUSHPULL 1
-#ifndef POCSAG_OUTPUT_MODE
-#define POCSAG_OUTPUT_MODE MODE_PUSHPULL
-#endif
 
 static NimBLEServer *bleServer = nullptr;
 static NimBLECharacteristic *rxCharacteristic = nullptr;
@@ -66,11 +59,7 @@ struct PageRecord {
 
 enum class OutputMode : uint8_t { kOpenDrain = 0, kPushPull = 1 };
 
-#if POCSAG_OUTPUT_MODE == MODE_OPENDRAIN
 constexpr OutputMode kDefaultOutputMode = OutputMode::kOpenDrain;
-#else
-constexpr OutputMode kDefaultOutputMode = OutputMode::kPushPull;
-#endif
 
 class PageStore {
  public:
@@ -435,11 +424,12 @@ class PocsagTx {
  public:
   PocsagTx() = default;
 
-  void begin(int dataPin, bool invert, uint32_t baud, OutputMode outputMode) {
+  void begin(int dataPin, bool invert, uint32_t baud, OutputMode outputMode, bool idleHigh) {
     instance_ = this;
     dataPin_ = dataPin;
     invert_ = invert;
     outputMode_ = outputMode;
+    idleHigh_ = idleHigh;
     pinMode(dataPin_, INPUT);
     timer_ = timerBegin(0, 80, true);
     timerAttachInterrupt(timer_, &PocsagTx::onTimer, true);
@@ -464,6 +454,11 @@ class PocsagTx {
 
   void setOutputMode(OutputMode outputMode) {
     outputMode_ = outputMode;
+    idleLine();
+  }
+
+  void setIdleHigh(bool idleHigh) {
+    idleHigh_ = idleHigh;
     idleLine();
   }
 
@@ -518,7 +513,7 @@ class PocsagTx {
   }
 
   void idleLine() {
-    bool idleLevel = kIdleLineHigh;
+    bool idleLevel = idleHigh_;
     if (invert_) {
       idleLevel = !idleLevel;
     }
@@ -545,6 +540,7 @@ class PocsagTx {
   int dataPin_ = -1;
   bool invert_ = false;
   OutputMode outputMode_ = OutputMode::kPushPull;
+  bool idleHigh_ = true;
   uint32_t baud_ = 1200;
   hw_timer_t *timer_ = nullptr;
   volatile bool sending_ = false;
@@ -921,7 +917,9 @@ static uint32_t configuredCapcodeInd = kDefaultCapcodeInd;
 static uint32_t configuredCapcodeGrp = kDefaultCapcodeGrp;
 static uint32_t configuredBaud = kDefaultBaud;
 static bool configuredInvert = kDefaultInvert;
-static OutputMode configuredOutputMode = kDefaultOutputMode;
+static OutputMode configuredOutputMode = OutputMode::kOpenDrain;
+static int configuredDataGpio = kDataGpio;
+static bool configuredIdleHigh = kDefaultIdleLineHigh;
 static bool configuredAutoProbe = false;
 static bool pendingStoredPage = false;
 static bool capGrpWasExplicitlySet = false;
@@ -946,6 +944,8 @@ void saveSettings() {
   preferences.putUInt("baud", configuredBaud);
   preferences.putBool("invert", configuredInvert);
   preferences.putUChar("output", static_cast<uint8_t>(configuredOutputMode));
+  preferences.putInt("data_gpio", configuredDataGpio);
+  preferences.putBool("idle_high", configuredIdleHigh);
   preferences.putBool("autoProbe", configuredAutoProbe);
   pageStore.persist(preferences);
 }
@@ -988,20 +988,41 @@ void enqueueRawBits(std::vector<uint8_t> &&bits, const String &label) {
   txQueue.push_back(TxRequest{std::move(bits), label});
 }
 
-std::vector<uint8_t> buildTestPattern(uint32_t capcode, uint8_t functionBits,
-                                      const String &message) {
-  uint64_t bitCount = (static_cast<uint64_t>(configuredBaud) * 2000) / 1000;
+std::vector<uint8_t> buildAlternatingBits(uint32_t durationMs) {
+  uint64_t bitCount = (static_cast<uint64_t>(configuredBaud) * durationMs) / 1000;
   if (bitCount == 0) {
     bitCount = 1;
   }
   std::vector<uint8_t> bits;
-  bits.reserve(static_cast<size_t>(bitCount) + kPreambleBits + 1024);
+  bits.reserve(static_cast<size_t>(bitCount));
   for (uint64_t i = 0; i < bitCount; ++i) {
     bits.push_back(static_cast<uint8_t>((i % 2) == 0));
   }
+  return bits;
+}
+
+std::vector<uint8_t> buildTestPattern(uint32_t capcode, uint8_t functionBits,
+                                      const String &message) {
+  std::vector<uint8_t> bits = buildAlternatingBits(2000);
   std::vector<uint8_t> batchBits = encoder.buildSingleBatch(capcode, functionBits, message);
   bits.insert(bits.end(), batchBits.begin(), batchBits.end());
   return bits;
+}
+
+String buildStatusLine() {
+  String status = "STATUS CAPIND=" + String(configuredCapcodeInd) +
+                  " CAPGRP=" + String(configuredCapcodeGrp) +
+                  " BAUD=" + String(configuredBaud) +
+                  " INVERT=" + String(configuredInvert ? 1 : 0) +
+                  " IDLE_HIGH=" + String(configuredIdleHigh ? 1 : 0) +
+                  " OUTPUT=" +
+                  String(configuredOutputMode == OutputMode::kPushPull ? "PUSH_PULL"
+                                                                       : "OPEN_DRAIN") +
+                  " DATA_GPIO=" + String(configuredDataGpio) +
+                  " ALERT_GPIO=" + String(kAlertGpio) +
+                  " AUTOPROBE=" + String(configuredAutoProbe ? 1 : 0) +
+                  " PAGES=" + String(pageStore.size());
+  return status;
 }
 
 bool parseUint32(const String &value, uint32_t &out) {
@@ -1053,6 +1074,13 @@ void handleCommand(const std::vector<String> &tokens) {
     queueStatus("STATUS INVERT=" + String(configuredInvert ? 1 : 0));
     return;
   }
+  if (cmd == "SET_IDLE" && tokens.size() >= 2) {
+    configuredIdleHigh = tokens[1].toInt() != 0;
+    tx.setIdleHigh(configuredIdleHigh);
+    saveSettings();
+    queueStatus("STATUS IDLE_HIGH=" + String(configuredIdleHigh ? 1 : 0));
+    return;
+  }
   if (cmd == "SET_MODE" && tokens.size() >= 2) {
     String value = tokens[1];
     value.toUpperCase();
@@ -1071,10 +1099,45 @@ void handleCommand(const std::vector<String> &tokens) {
                                                                     : "OPEN_DRAIN"));
     return;
   }
+  if (cmd == "SET_GPIO" && tokens.size() >= 2) {
+    uint32_t pin = 0;
+    if (!parseUint32(tokens[1], pin)) {
+      queueStatus("ERROR GPIO INVALID");
+      return;
+    }
+    configuredDataGpio = static_cast<int>(pin);
+    tx.begin(configuredDataGpio, configuredInvert, configuredBaud, configuredOutputMode,
+             configuredIdleHigh);
+    saveSettings();
+    queueStatus(buildStatusLine());
+    return;
+  }
   if (cmd == "SEND_TEST") {
     std::vector<uint8_t> bits = buildTestPattern(configuredCapcodeInd, 0, "TEST");
     enqueueRawBits(std::move(bits), "TEST_PATTERN");
     queueStatus("STATUS TEST QUEUED");
+    return;
+  }
+  if (cmd == "SEND_MIN" && tokens.size() >= 3) {
+    uint32_t capcode = 0;
+    uint8_t functionBits = 0;
+    if (!parseUint32(tokens[1], capcode) || !parseFunctionBits(tokens[2], functionBits)) {
+      queueStatus("ERROR SEND_MIN INVALID");
+      return;
+    }
+    std::vector<uint8_t> bits = buildAlternatingBits(2000);
+    std::vector<uint32_t> batch = encoder.buildSingleBatchCodewords(capcode, functionBits, nullptr);
+    std::vector<uint8_t> batchBits = encoder.buildBitstreamFromCodewords(batch, false);
+    bits.insert(bits.end(), batchBits.begin(), batchBits.end());
+    enqueueRawBits(std::move(bits), "MIN_PAGE");
+    queueStatus("STATUS MIN QUEUED");
+    return;
+  }
+  if (cmd == "SEND_SYNC") {
+    std::vector<uint32_t> codewords = {kSyncWord, kIdleWord, kIdleWord};
+    std::vector<uint8_t> bits = encoder.buildBitstreamFromCodewords(codewords, true);
+    enqueueRawBits(std::move(bits), "SYNC_ONLY");
+    queueStatus("STATUS SYNC QUEUED");
     return;
   }
   if (cmd == "SEND_ADDR" && tokens.size() >= 3) {
@@ -1172,6 +1235,13 @@ void handleCommand(const std::vector<String> &tokens) {
       tx.setInvert(configuredInvert);
       saveSettings();
       queueStatus("STATUS INVERT=" + String(configuredInvert ? 1 : 0));
+      return;
+    }
+    if (key == "IDLE" && tokens.size() >= 3) {
+      configuredIdleHigh = tokens[2].toInt() != 0;
+      tx.setIdleHigh(configuredIdleHigh);
+      saveSettings();
+      queueStatus("STATUS IDLE_HIGH=" + String(configuredIdleHigh ? 1 : 0));
       return;
     }
     if (key == "OUTPUT") {
@@ -1298,18 +1368,7 @@ void handleCommand(const std::vector<String> &tokens) {
   }
 
   if (cmd == "STATUS") {
-    String status = "STATUS CAPIND=" + String(configuredCapcodeInd) +
-                    " CAPGRP=" + String(configuredCapcodeGrp) +
-                    " BAUD=" + String(configuredBaud) +
-                    " INVERT=" + String(configuredInvert ? 1 : 0) +
-                    " OUTPUT=" +
-                    String(configuredOutputMode == OutputMode::kPushPull ? "PUSH_PULL"
-                                                                         : "OPEN_DRAIN") +
-                    " DATA_GPIO=" + String(kDataGpio) +
-                    " ALERT_GPIO=" + String(kAlertGpio) +
-                    " AUTOPROBE=" + String(configuredAutoProbe ? 1 : 0) +
-                    " PAGES=" + String(pageStore.size());
-    queueStatus(status);
+    queueStatus(buildStatusLine());
     return;
   }
 
@@ -1427,13 +1486,16 @@ void setup() {
   configuredOutputMode =
       outputValue == static_cast<uint8_t>(OutputMode::kOpenDrain) ? OutputMode::kOpenDrain
                                                                    : OutputMode::kPushPull;
+  configuredDataGpio = preferences.getInt("data_gpio", kDataGpio);
+  configuredIdleHigh = preferences.getBool("idle_high", kDefaultIdleLineHigh);
   configuredAutoProbe = preferences.getBool("autoProbe", false);
   pageStore.load(preferences);
   if (migratedLegacy) {
     saveSettings();
   }
 
-  tx.begin(kDataGpio, configuredInvert, configuredBaud, configuredOutputMode);
+  tx.begin(configuredDataGpio, configuredInvert, configuredBaud, configuredOutputMode,
+           configuredIdleHigh);
   probe.begin(kAlertGpio);
 
   parser.setHandler(handleCommand);
@@ -1466,10 +1528,11 @@ void setup() {
   Serial.println("  CAPGRP=" + String(configuredCapcodeGrp));
   Serial.println("  BAUD=" + String(configuredBaud));
   Serial.println("  INVERT=" + String(configuredInvert ? 1 : 0));
+  Serial.println("  IDLE_HIGH=" + String(configuredIdleHigh ? 1 : 0));
   Serial.println("  OUTPUT=" +
                  String(configuredOutputMode == OutputMode::kPushPull ? "PUSH_PULL"
                                                                       : "OPEN_DRAIN"));
-  Serial.println("  DATA_GPIO=" + String(kDataGpio));
+  Serial.println("  DATA_GPIO=" + String(configuredDataGpio));
   Serial.println("  ALERT_GPIO=" + String(kAlertGpio));
   Serial.println("  AUTOPROBE=" + String(configuredAutoProbe ? 1 : 0));
   queueStatus("READY");
