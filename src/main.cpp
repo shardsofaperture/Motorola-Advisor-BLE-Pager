@@ -12,7 +12,7 @@ namespace {
 constexpr const char *kDeviceName = "PagerBridge";
 
 // Compile-time configuration.
-constexpr int kDataGpio = 2;
+constexpr int kDataGpio = 3; // D2 on XIAO ESP32-S3status
 constexpr int kAlertGpio = -1;
 constexpr uint32_t kDefaultCapcodeInd = 123456;
 constexpr uint32_t kDefaultCapcodeGrp = 123457;
