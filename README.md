@@ -3,17 +3,22 @@
 ## What this does (no RF)
 This project turns a Seeed XIAO ESP32-S3 into a BLE/Serial bridge that injects a **POCSAG baseband NRZ stream** directly into a Motorola Advisor II logic board. The RF board is removed; the ESP32 drives the **DATA injection node** on the logic board (continuity to the RF board’s **TA31142 pin 15** net). The pager logic board decodes POCSAG exactly like it would from RF.  
 
-## Wiring
+## Wiring / Injection (Advisor II)
 ### Required
-- **ESP32 GND → pager GND** (common ground is mandatory).
-- **ESP32 GPIO2 → pager DATA injection test point**  
-  - This test point has continuity to the RF board TA31142 pin 15 net via the board-to-board connector.
-  - **Recommended:** put a **1k–4.7k series resistor** in-line from GPIO2 to the DATA node.
+- **ESP32 GND → pager GND** (common ground is mandatory).  
+  - Tie to **TA31142 pin 19** or a nearby ground plane on the RF board.
+- **ESP32 GPIO2 (D2) → TA31142 pin 15 net**  
+  - **Recommended:** insert a **1k–2k series resistor** in-line from GPIO2 to the injection node.
+  - **Best practice:** isolate the TA31142 output by **lifting pin 15** or **cutting the trace**, then inject on the **downstream side** toward the logic board.
 
 ### Drive style
-The firmware emulates **open-drain** drive on GPIO2:
-- **Active / “0”**: GPIO2 driven **OUTPUT LOW**
-- **Idle / “1”**: GPIO2 set to **INPUT (hi-Z)**
+By default the firmware drives **push-pull** for TA31142 injection:
+- **Logic 1 / idle**: GPIO2 driven **HIGH**
+- **Logic 0**: GPIO2 driven **LOW**
+
+You can also choose **open-drain** if you need to share a line:
+- **Logic 1 / idle**: GPIO2 set to **INPUT (hi-Z)**
+- **Logic 0**: GPIO2 driven **OUTPUT LOW**
 
 ### Optional (for automatic probe/hit detection)
 If you want PROBE auto-detect to work, wire the pager’s alert indication to **ALERT_GPIO** (see `kAlertGpio` in `src/main.cpp`):
@@ -85,6 +90,11 @@ SET BAUD 1200
 SET INVERT 1
 ```
 
+### SET OUTPUT <PUSH_PULL|OPEN_DRAIN>
+```
+SET OUTPUT PUSH_PULL
+```
+
 ### SET AUTOPROBE <0|1>
 Enable/disable a one-time probe on boot (tries the saved IND then GRP capcodes once).
 ```
@@ -113,6 +123,12 @@ PAGEG Hello
 Send to a specific capcode.
 ```
 PAGE 0123457 Hello
+```
+
+### TEST CARRIER <ms>
+Transmit a repeating 0xAA pattern for wiring verification (uses current BAUD/output/invert).
+```
+TEST CARRIER 3000
 ```
 
 ### LIST
@@ -177,6 +193,30 @@ SAVE
    ```
 6. If you need auto-probe, wire ALERT_GPIO and use `PROBE START` or `PROBE BINARY`.
 
+## Recommended settings (Advisor II TA31142 injection)
+- **BAUD:** 512  
+- **INVERT:** 0  
+- **OUTPUT:** PUSH_PULL  
+- **CAPCODES:** 123456 (individual) / 123457 (group)
+
+## Quick Test (wiring verification)
+1. Check current settings:
+   ```
+   STATUS
+   ```
+2. Send a carrier:
+   ```
+   TEST CARRIER 3000
+   ```
+3. Page individual capcode:
+   ```
+   PAGEI test
+   ```
+4. Page group capcode:
+   ```
+   PAGEG test
+   ```
+
 ## Expected behavior / troubleshooting
 - **No serial output**  
   Ensure `ARDUINO_USB_CDC_ON_BOOT=1` is enabled (already in `platformio.ini`) and you’re using 115200 baud.
@@ -188,4 +228,4 @@ SAVE
   `PROBE START` and `PROBE BINARY` **require ALERT_GPIO**. If ALERT_GPIO isn’t wired, you’ll get `ERROR PROBE NO_ALERT_GPIO`. Use `PROBE ONESHOT` and watch the pager manually.
 
 ### Notes
-- Leading zeros are fine to type; the pager address is numeric.
+- Leading zeros are just formatting (e.g., **0123456 == 123456**).
