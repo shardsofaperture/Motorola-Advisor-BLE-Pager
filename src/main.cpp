@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <deque>
 #include <functional>
 #include <vector>
@@ -18,6 +19,8 @@ constexpr uint32_t kDefaultCapcodeInd = 123456;
 constexpr uint32_t kDefaultCapcodeGrp = 123457;
 constexpr uint32_t kDefaultBaud = 512;
 constexpr bool kDefaultInvert = false;
+constexpr bool kIdleLineHigh = true;
+constexpr uint32_t kPocsagBatchWordCount = 17;
 constexpr size_t kPageStoreCapacity = 20;
 constexpr size_t kPersistPageCount = 3;
 constexpr uint32_t kPreambleBits = 576;
@@ -26,6 +29,13 @@ constexpr uint32_t kProbeGapMs = 500;
 
 constexpr uint32_t kSyncWord = 0x7CD215D8;
 constexpr uint32_t kIdleWord = 0x7A89C197;
+
+// Compile-time output mode selection.
+#define MODE_OPENDRAIN 0
+#define MODE_PUSHPULL 1
+#ifndef POCSAG_OUTPUT_MODE
+#define POCSAG_OUTPUT_MODE MODE_PUSHPULL
+#endif
 
 static NimBLEServer *bleServer = nullptr;
 static NimBLECharacteristic *rxCharacteristic = nullptr;
@@ -55,6 +65,12 @@ struct PageRecord {
 };
 
 enum class OutputMode : uint8_t { kOpenDrain = 0, kPushPull = 1 };
+
+#if POCSAG_OUTPUT_MODE == MODE_OPENDRAIN
+constexpr OutputMode kDefaultOutputMode = OutputMode::kOpenDrain;
+#else
+constexpr OutputMode kDefaultOutputMode = OutputMode::kPushPull;
+#endif
 
 class PageStore {
  public:
@@ -165,7 +181,7 @@ class PocsagEncoder {
 
     appendPreamble(bits);
 
-    std::vector<uint32_t> codewords = buildCodewords(capcode, message);
+    std::vector<uint32_t> codewords = buildCodewords(capcode, message, 0);
     for (uint32_t word : codewords) {
       appendWord(bits, word);
     }
@@ -173,6 +189,50 @@ class PocsagEncoder {
     appendWord(bits, kIdleWord);
     appendWord(bits, kIdleWord);
     return bits;
+  }
+
+  std::vector<uint8_t> buildBitstreamFromCodewords(const std::vector<uint32_t> &codewords,
+                                                   bool includePreamble) const {
+    std::vector<uint8_t> bits;
+    bits.reserve(kPreambleBits + codewords.size() * 32);
+    if (includePreamble) {
+      appendPreamble(bits);
+    }
+    for (uint32_t word : codewords) {
+      appendWord(bits, word);
+    }
+    return bits;
+  }
+
+  std::vector<uint8_t> buildSingleBatch(uint32_t capcode, uint8_t functionBits,
+                                        const String &message) const {
+    std::vector<uint32_t> batch = buildSingleBatchCodewords(capcode, functionBits, &message);
+    return buildBitstreamFromCodewords(batch, true);
+  }
+
+  std::vector<uint8_t> buildSingleBatchAddressOnly(uint32_t capcode, uint8_t functionBits) const {
+    std::vector<uint32_t> batch = buildSingleBatchCodewords(capcode, functionBits, nullptr);
+    return buildBitstreamFromCodewords(batch, true);
+  }
+
+  std::vector<uint32_t> buildSingleBatchCodewords(uint32_t capcode, uint8_t functionBits,
+                                                  const String *message) const {
+    std::vector<uint32_t> words;
+    words.reserve(kPocsagBatchWordCount);
+    words.push_back(kSyncWord);
+    uint8_t frame = capcode % 8;
+    uint32_t addressWord = buildAddressWord(capcode, functionBits);
+    uint32_t messageWord = message ? buildMessageWordFromText(*message) : kIdleWord;
+    for (uint8_t frameIndex = 0; frameIndex < 8; ++frameIndex) {
+      if (frameIndex == frame) {
+        words.push_back(addressWord);
+        words.push_back(messageWord);
+      } else {
+        words.push_back(kIdleWord);
+        words.push_back(kIdleWord);
+      }
+    }
+    return words;
   }
 
  private:
@@ -189,10 +249,11 @@ class PocsagEncoder {
     }
   }
 
-  std::vector<uint32_t> buildCodewords(uint32_t capcode, const String &message) const {
+  std::vector<uint32_t> buildCodewords(uint32_t capcode, const String &message,
+                                       uint8_t functionBits) const {
     std::vector<uint32_t> codewords;
     std::vector<uint32_t> messageWords = buildMessageWords(message);
-    uint32_t addressWord = buildAddressWord(capcode, 0);
+    uint32_t addressWord = buildAddressWord(capcode, functionBits);
 
     size_t messageIndex = 0;
     uint8_t frame = capcode % 8;
@@ -332,6 +393,14 @@ class PocsagEncoder {
     return buildCodeword(1, data20 & 0xFFFFF);
   }
 
+  uint32_t buildMessageWordFromText(const String &message) const {
+    std::vector<uint32_t> words = buildAlphaWords(message);
+    if (!words.empty()) {
+      return words.front();
+    }
+    return buildMessageWord(0);
+  }
+
   uint32_t buildCodeword(uint8_t typeBit, uint32_t data) const {
     uint32_t data21 = (static_cast<uint32_t>(typeBit) << 20) | (data & 0xFFFFF);
     uint32_t bch = bchEncode(data21);
@@ -382,7 +451,9 @@ class PocsagTx {
     baud_ = baud;
     if (timer_ != nullptr) {
       timerAlarmDisable(timer_);
-      timerAlarmWrite(timer_, 1000000 / baud_, true);
+      // 512 bps bit period: 1.953125 ms (1953.125 us).
+      uint32_t periodUs = (1000000 + (baud_ / 2)) / baud_;
+      timerAlarmWrite(timer_, periodUs, true);
     }
   }
 
@@ -405,7 +476,7 @@ class PocsagTx {
     bits_ = std::move(bits);
     bitIndex_ = 0;
     sending_ = true;
-    timerAlarmWrite(timer_, 1000000 / baud_, true);
+    timerAlarmWrite(timer_, bitPeriodUs(), true);
     timerAlarmEnable(timer_);
     return true;
   }
@@ -443,6 +514,18 @@ class PocsagTx {
     if (invert_) {
       level = !level;
     }
+    applyLineLevel(level);
+  }
+
+  void idleLine() {
+    bool idleLevel = kIdleLineHigh;
+    if (invert_) {
+      idleLevel = !idleLevel;
+    }
+    applyLineLevel(idleLevel);
+  }
+
+  void applyLineLevel(bool level) {
     if (outputMode_ == OutputMode::kPushPull) {
       pinMode(dataPin_, OUTPUT);
       digitalWrite(dataPin_, level ? HIGH : LOW);
@@ -456,14 +539,7 @@ class PocsagTx {
     digitalWrite(dataPin_, LOW);
   }
 
-  void idleLine() {
-    if (outputMode_ == OutputMode::kPushPull) {
-      pinMode(dataPin_, OUTPUT);
-      digitalWrite(dataPin_, HIGH);
-      return;
-    }
-    pinMode(dataPin_, INPUT);
-  }
+  uint32_t bitPeriodUs() const { return (1000000 + (baud_ / 2)) / baud_; }
 
   static PocsagTx *instance_;
   int dataPin_ = -1;
@@ -845,7 +921,7 @@ static uint32_t configuredCapcodeInd = kDefaultCapcodeInd;
 static uint32_t configuredCapcodeGrp = kDefaultCapcodeGrp;
 static uint32_t configuredBaud = kDefaultBaud;
 static bool configuredInvert = kDefaultInvert;
-static OutputMode configuredOutputMode = OutputMode::kPushPull;
+static OutputMode configuredOutputMode = kDefaultOutputMode;
 static bool configuredAutoProbe = false;
 static bool pendingStoredPage = false;
 static bool capGrpWasExplicitlySet = false;
@@ -908,12 +984,142 @@ void enqueueCarrier(uint32_t durationMs) {
   txQueue.push_back(TxRequest{std::move(bits), "CARRIER"});
 }
 
+void enqueueRawBits(std::vector<uint8_t> &&bits, const String &label) {
+  txQueue.push_back(TxRequest{std::move(bits), label});
+}
+
+std::vector<uint8_t> buildTestPattern(uint32_t capcode, uint8_t functionBits,
+                                      const String &message) {
+  uint64_t bitCount = (static_cast<uint64_t>(configuredBaud) * 2000) / 1000;
+  if (bitCount == 0) {
+    bitCount = 1;
+  }
+  std::vector<uint8_t> bits;
+  bits.reserve(static_cast<size_t>(bitCount) + kPreambleBits + 1024);
+  for (uint64_t i = 0; i < bitCount; ++i) {
+    bits.push_back(static_cast<uint8_t>((i % 2) == 0));
+  }
+  std::vector<uint8_t> batchBits = encoder.buildSingleBatch(capcode, functionBits, message);
+  bits.insert(bits.end(), batchBits.begin(), batchBits.end());
+  return bits;
+}
+
+bool parseUint32(const String &value, uint32_t &out) {
+  if (value.length() == 0) {
+    return false;
+  }
+  for (size_t i = 0; i < value.length(); ++i) {
+    if (!isdigit(static_cast<unsigned char>(value[i]))) {
+      return false;
+    }
+  }
+  out = value.toInt();
+  return true;
+}
+
+bool parseFunctionBits(const String &value, uint8_t &out) {
+  uint32_t parsed = 0;
+  if (!parseUint32(value, parsed) || parsed > 3) {
+    return false;
+  }
+  out = static_cast<uint8_t>(parsed);
+  return true;
+}
+
+bool isValidRate(uint32_t rate) { return rate == 512 || rate == 1200 || rate == 2400; }
+
 void handleCommand(const std::vector<String> &tokens) {
   if (tokens.empty()) {
     return;
   }
   String cmd = tokens[0];
   cmd.toUpperCase();
+  if (cmd == "SET_RATE" && tokens.size() >= 2) {
+    uint32_t rate = tokens[1].toInt();
+    if (!isValidRate(rate)) {
+      queueStatus("ERROR RATE INVALID");
+      return;
+    }
+    configuredBaud = rate;
+    tx.setBaud(configuredBaud);
+    saveSettings();
+    queueStatus("STATUS BAUD=" + String(configuredBaud));
+    return;
+  }
+  if (cmd == "SET_INVERT" && tokens.size() >= 2) {
+    configuredInvert = tokens[1].toInt() != 0;
+    tx.setInvert(configuredInvert);
+    saveSettings();
+    queueStatus("STATUS INVERT=" + String(configuredInvert ? 1 : 0));
+    return;
+  }
+  if (cmd == "SET_MODE" && tokens.size() >= 2) {
+    String value = tokens[1];
+    value.toUpperCase();
+    if (value == "OPENDRAIN" || value == "OPEN_DRAIN") {
+      configuredOutputMode = OutputMode::kOpenDrain;
+    } else if (value == "PUSHPULL" || value == "PUSH_PULL") {
+      configuredOutputMode = OutputMode::kPushPull;
+    } else {
+      queueStatus("ERROR MODE INVALID");
+      return;
+    }
+    tx.setOutputMode(configuredOutputMode);
+    saveSettings();
+    queueStatus("STATUS OUTPUT=" +
+                String(configuredOutputMode == OutputMode::kPushPull ? "PUSH_PULL"
+                                                                    : "OPEN_DRAIN"));
+    return;
+  }
+  if (cmd == "SEND_TEST") {
+    std::vector<uint8_t> bits = buildTestPattern(configuredCapcodeInd, 0, "TEST");
+    enqueueRawBits(std::move(bits), "TEST_PATTERN");
+    queueStatus("STATUS TEST QUEUED");
+    return;
+  }
+  if (cmd == "SEND_ADDR" && tokens.size() >= 3) {
+    uint32_t capcode = 0;
+    uint8_t functionBits = 0;
+    if (!parseUint32(tokens[1], capcode) || !parseFunctionBits(tokens[2], functionBits)) {
+      queueStatus("ERROR SEND_ADDR INVALID");
+      return;
+    }
+    std::vector<uint8_t> bits = encoder.buildSingleBatchAddressOnly(capcode, functionBits);
+    enqueueRawBits(std::move(bits), "ADDR_ONLY");
+    queueStatus("STATUS ADDR QUEUED");
+    return;
+  }
+  if (cmd == "SEND_MSG" && tokens.size() >= 4) {
+    uint32_t capcode = 0;
+    uint8_t functionBits = 0;
+    if (!parseUint32(tokens[1], capcode) || !parseFunctionBits(tokens[2], functionBits)) {
+      queueStatus("ERROR SEND_MSG INVALID");
+      return;
+    }
+    String message;
+    for (size_t i = 3; i < tokens.size(); ++i) {
+      if (i > 3) {
+        message += " ";
+      }
+      message += tokens[i];
+    }
+    std::vector<uint8_t> bits = encoder.buildSingleBatch(capcode, functionBits, message);
+    enqueueRawBits(std::move(bits), "MSG_SINGLE");
+    queueStatus("STATUS MSG QUEUED");
+    return;
+  }
+  if (cmd == "SEND_CODEWORDS" && tokens.size() >= 2) {
+    std::vector<uint32_t> codewords;
+    codewords.reserve(tokens.size() - 1);
+    for (size_t i = 1; i < tokens.size(); ++i) {
+      uint32_t value = static_cast<uint32_t>(strtoul(tokens[i].c_str(), nullptr, 0));
+      codewords.push_back(value);
+    }
+    std::vector<uint8_t> bits = encoder.buildBitstreamFromCodewords(codewords, true);
+    enqueueRawBits(std::move(bits), "CODEWORDS");
+    queueStatus("STATUS CODEWORDS QUEUED");
+    return;
+  }
   if (cmd == "SET" && tokens.size() >= 3) {
     String key = tokens[1];
     key.toUpperCase();
@@ -950,7 +1156,12 @@ void handleCommand(const std::vector<String> &tokens) {
       return;
     }
     if (key == "BAUD") {
-      configuredBaud = tokens[2].toInt();
+      uint32_t rate = tokens[2].toInt();
+      if (!isValidRate(rate)) {
+        queueStatus("ERROR BAUD INVALID");
+        return;
+      }
+      configuredBaud = rate;
       tx.setBaud(configuredBaud);
       saveSettings();
       queueStatus("STATUS BAUD=" + String(configuredBaud));
@@ -1212,7 +1423,7 @@ void setup() {
   configuredBaud = preferences.getUInt("baud", kDefaultBaud);
   configuredInvert = preferences.getBool("invert", kDefaultInvert);
   uint8_t outputValue =
-      preferences.getUChar("output", static_cast<uint8_t>(OutputMode::kPushPull));
+      preferences.getUChar("output", static_cast<uint8_t>(kDefaultOutputMode));
   configuredOutputMode =
       outputValue == static_cast<uint8_t>(OutputMode::kOpenDrain) ? OutputMode::kOpenDrain
                                                                    : OutputMode::kPushPull;

@@ -7,18 +7,18 @@ This project turns a Seeed XIAO ESP32-S3 into a BLE/Serial bridge that injects a
 ### Required
 - **ESP32 GND → pager GND** (common ground is mandatory).  
   - Tie to **TA31142 pin 19** or a nearby ground plane on the RF board.
-- **ESP32 GPIO2 (D2) → TA31142 pin 15 net**  
-  - **Recommended:** insert a **1k–2k series resistor** in-line from GPIO2 to the injection node.
+- **ESP32 GPIO3 (D2) → TA31142 pin 15 net**  
+  - **Recommended:** insert a **1k–2k series resistor** in-line from GPIO3 to the injection node.
   - **Best practice:** isolate the TA31142 output by **lifting pin 15** or **cutting the trace**, then inject on the **downstream side** toward the logic board.
 
 ### Drive style
 By default the firmware drives **push-pull** for TA31142 injection:
-- **Logic 1 / idle**: GPIO2 driven **HIGH**
-- **Logic 0**: GPIO2 driven **LOW**
+- **Logic 1 / idle**: GPIO3 driven **HIGH**
+- **Logic 0**: GPIO3 driven **LOW**
 
 You can also choose **open-drain** if you need to share a line:
-- **Logic 1 / idle**: GPIO2 set to **INPUT (hi-Z)**
-- **Logic 0**: GPIO2 driven **OUTPUT LOW**
+- **Logic 1 / idle**: GPIO3 set to **INPUT (hi-Z)**
+- **Logic 0**: GPIO3 driven **OUTPUT LOW**
 
 ### Optional (for automatic probe/hit detection)
 If you want PROBE auto-detect to work, wire the pager’s alert indication to **ALERT_GPIO** (see `kAlertGpio` in `src/main.cpp`):
@@ -80,7 +80,7 @@ SET CAPGRP 0123457
 SET CAPS 0123456 0123457
 ```
 
-### SET BAUD <512|1200|2400|6400>
+### SET BAUD <512|1200|2400>
 ```
 SET BAUD 1200
 ```
@@ -129,6 +129,43 @@ PAGE 0123457 Hello
 Transmit a repeating 0xAA pattern for wiring verification (uses current BAUD/output/invert).
 ```
 TEST CARRIER 3000
+```
+
+### SET_RATE <512|1200|2400>
+```
+SET_RATE 512
+```
+
+### SET_INVERT <0|1>
+```
+SET_INVERT 0
+```
+
+### SET_MODE <opendrain|pushpull>
+```
+SET_MODE opendrain
+```
+
+### SEND_TEST
+Send a 2-second 1010 test pattern, then a full preamble + sync + one batch.
+```
+SEND_TEST
+```
+
+### SEND_ADDR <capcode> <function 0-3>
+```
+SEND_ADDR 123456 0
+```
+
+### SEND_MSG <capcode> <function 0-3> <ascii>
+```
+SEND_MSG 123456 0 "HELLO"
+```
+
+### SEND_CODEWORDS <hex...>
+Inject already-encoded 32-bit codewords (useful for bring-up).
+```
+SEND_CODEWORDS 0x7CD215D8 0x12345678 0x7A89C197
 ```
 
 ### LIST
@@ -180,7 +217,7 @@ SAVE
 ```
 
 ## Quick-start
-1. Wire GND and GPIO2 to the pager DATA injection node (with series resistor).
+1. Wire GND and GPIO3 to the pager DATA injection node (with series resistor).
 2. Flash the firmware (PlatformIO).
 3. Open Serial Monitor at 115200 and confirm the boot banner prints settings.
 4. Send a page:
@@ -198,6 +235,17 @@ SAVE
 - **INVERT:** 0  
 - **OUTPUT:** PUSH_PULL  
 - **CAPCODES:** 123456 (individual) / 123457 (group)
+
+## Injecting into logic board (no RF board)
+When the RF/IF board is removed, the logic board still expects **sliced data** on the node that
+normally connects to the RF detector’s **FSK OUT / sliced data** line. Wire:
+- **GND → logic board GND**
+- **DATA → logic board DATA-IN node** (the same net that previously went to RF board FSK OUT)
+
+## Troubleshooting (top 3)
+1. **Wrong pad / net**: confirm you are on the logic board’s DATA-IN node (the RF board’s FSK OUT net).
+2. **Wrong polarity**: try toggling invert (`SET_INVERT 1`) if you see activity but no decode.
+3. **Missing pull-up / mode mismatch**: switch between push-pull and open-drain (`SET_MODE opendrain`).
 
 ## Quick Test (wiring verification)
 1. Check current settings:
