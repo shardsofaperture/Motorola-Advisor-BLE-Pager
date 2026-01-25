@@ -369,7 +369,11 @@ class PocsagEncoder {
     bits.reserve(message.length() * 7);
     for (size_t i = 0; i < message.length(); ++i) {
       uint8_t value = static_cast<uint8_t>(message[i]) & 0x7F;
-      for (int b = 6; b >= 0; --b) {
+      // POCSAG alphanumeric: append 7-bit ASCII LSB-first (bit 0 -> bit 6).
+      // Example: "A" (0x41, b1000001) yields bit stream: 1 0 0 0 0 0 1,
+      // which packs into the first payload as 0b1000001 followed by padding
+      // zeros => data20 = 0x82000 (bits 19..13 set as 1 0 0 0 0 0 1).
+      for (int b = 0; b <= 6; ++b) {
         bits.push_back(static_cast<uint8_t>((value >> b) & 0x1));
       }
     }
@@ -378,6 +382,7 @@ class PocsagEncoder {
     while (index < bits.size()) {
       uint32_t data = 0;
       for (int i = 0; i < 20; ++i) {
+        // Pack bits in transmission order: first bit becomes MSB of payload.
         data <<= 1;
         if (index < bits.size()) {
           data |= bits[index++];
