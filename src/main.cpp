@@ -459,6 +459,12 @@ class PocsagTx {
   PocsagTx() = default;
 
   void begin(int dataPin, bool invert, uint32_t baud, OutputMode outputMode, bool idleHigh) {
+    if (timer_ != nullptr) {
+      timerAlarmDisable(timer_);
+      timerDetachInterrupt(timer_);
+      timerEnd(timer_);
+      timer_ = nullptr;
+    }
     instance_ = this;
     dataPin_ = dataPin;
     invert_ = invert;
