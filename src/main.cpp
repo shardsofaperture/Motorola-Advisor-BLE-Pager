@@ -20,10 +20,12 @@ constexpr uint32_t kDefaultCapcodeGrp = 123457;
 constexpr uint32_t kDefaultBaud = 512;
 constexpr bool kDefaultInvert = false;
 constexpr bool kDefaultIdleLineHigh = true;
+constexpr uint8_t kDefaultFunctionBits = 0;
 constexpr uint32_t kPocsagBatchWordCount = 17;
 constexpr size_t kPageStoreCapacity = 20;
 constexpr size_t kPersistPageCount = 3;
 constexpr uint32_t kPreambleBits = 576;
+constexpr uint32_t kDefaultPreambleMs = (kPreambleBits * 1000) / kDefaultBaud;
 constexpr uint32_t kAlertWindowMs = 2000;
 constexpr uint32_t kProbeGapMs = 500;
 
@@ -73,6 +75,10 @@ extern OutputMode configuredOutputMode;
 
 bool send_min_page(InjectionProfile profile, uint32_t capcode, uint8_t functionBits,
                    uint32_t baud, bool invert, bool idleHigh, uint32_t preambleBits);
+bool send_min_page(uint32_t capcode, uint8_t functionBits, uint32_t preambleMs);
+bool send_min_page_with_settings(uint32_t capcode, uint8_t functionBits, uint32_t preambleMs,
+                                 uint32_t baud, bool invert, bool idleHigh,
+                                 OutputMode outputMode);
 
 std::vector<int> parseGpioList(const String &value);
 
@@ -621,6 +627,12 @@ std::vector<uint8_t> buildMinimalNrzBits(const PocsagEncoder &encoder, uint32_t 
   return bits;
 }
 
+uint32_t preambleBitsFromMs(uint32_t baud, uint32_t preambleMs) {
+  uint64_t bits =
+      (static_cast<uint64_t>(baud) * static_cast<uint64_t>(preambleMs) + 999) / 1000;
+  return std::max<uint32_t>(1, static_cast<uint32_t>(bits));
+}
+
 EncodedWaveform encodeManchester(const std::vector<uint8_t> &nrzBits, uint32_t baud) {
   EncodedWaveform waveform;
   waveform.bits.reserve(nrzBits.size() * 2);
@@ -1081,6 +1093,233 @@ constexpr bool AutotestController::kInverts[];
 constexpr bool AutotestController::kIdleHighs[];
 constexpr uint32_t AutotestController::kPreambles[];
 
+class AutotestFastController {
+ public:
+  explicit AutotestFastController(PocsagTx &tx) : tx_(tx) {}
+
+  void start(uint32_t durationSeconds, uint32_t savedBaud, bool savedInvert, bool savedIdleHigh,
+             OutputMode savedOutputMode) {
+    capcode_ = kDefaultCapcodeInd;
+    startTimeMs_ = millis();
+    endTimeMs_ = startTimeMs_ + durationSeconds * 1000;
+    comboStartMs_ = 0;
+    comboEndMs_ = 0;
+    invertIndex_ = 0;
+    functionIndex_ = 0;
+    preambleIndex_ = 0;
+    outputIndex_ = 0;
+    stopRequested_ = false;
+    active_ = true;
+    nextAllowedMs_ = 0;
+    attempt_ = 0;
+    savedBaud_ = savedBaud;
+    savedInvert_ = savedInvert;
+    savedIdleHigh_ = savedIdleHigh;
+    savedOutputMode_ = savedOutputMode;
+  }
+
+  void requestStop() { stopRequested_ = true; }
+
+  bool isActive() const { return active_; }
+
+  void update() {
+    if (!active_) {
+      return;
+    }
+    if (tx_.isBusy()) {
+      return;
+    }
+    if (stopRequested_ || millis() >= endTimeMs_) {
+      finish(stopRequested_ ? "STATUS AUTOTEST_FAST STOPPED" : "STATUS AUTOTEST_FAST DONE");
+      return;
+    }
+    if (millis() < nextAllowedMs_) {
+      return;
+    }
+    if (!ensureComboWindow()) {
+      finish("STATUS AUTOTEST_FAST DONE");
+      return;
+    }
+    if (!send_min_page_with_settings(capcode_, currentSettings_.functionBits,
+                                     currentSettings_.preambleMs, kFixedBaud,
+                                     currentSettings_.invert, configuredIdleHigh,
+                                     currentSettings_.outputMode)) {
+      queueStatus("ERROR AUTOTEST_FAST TX_BUSY");
+      return;
+    }
+    nextAllowedMs_ = millis() + kFastGapMs;
+  }
+
+ private:
+  struct AutotestFastSettings {
+    bool invert = false;
+    uint8_t functionBits = 0;
+    uint32_t preambleMs = 800;
+    OutputMode outputMode = OutputMode::kOpenDrain;
+  };
+
+  static constexpr uint32_t kFixedBaud = 512;
+  static constexpr bool kInverts[] = {false, true};
+  static constexpr uint32_t kPreamblesMs[] = {800, 1500, 2500};
+  static constexpr OutputMode kOutputModes[] = {OutputMode::kOpenDrain,
+                                                OutputMode::kPushPull};
+  static constexpr size_t kInvertCount = sizeof(kInverts) / sizeof(kInverts[0]);
+  static constexpr size_t kPreambleCount = sizeof(kPreamblesMs) / sizeof(kPreamblesMs[0]);
+  static constexpr size_t kOutputCount = sizeof(kOutputModes) / sizeof(kOutputModes[0]);
+  static constexpr uint32_t kFastGapMs = 200;
+
+  AutotestFastSettings currentSettings() const {
+    AutotestFastSettings settings;
+    settings.invert = kInverts[invertIndex_];
+    settings.functionBits = static_cast<uint8_t>(functionIndex_);
+    settings.preambleMs = kPreamblesMs[preambleIndex_];
+    settings.outputMode = kOutputModes[outputIndex_];
+    return settings;
+  }
+
+  String buildAttemptLine(const AutotestFastSettings &settings) const {
+    String line = "FAST invert=" + String(settings.invert ? 1 : 0) +
+                  " func=" + String(settings.functionBits) +
+                  " preamble=" + String(settings.preambleMs) + "ms output=" +
+                  String(settings.outputMode == OutputMode::kOpenDrain ? "OPEN_DRAIN"
+                                                                       : "PUSH_PULL");
+    return line;
+  }
+
+  uint32_t comboDurationMs() const {
+    uint32_t totalCombos =
+        static_cast<uint32_t>(kInvertCount * kPreambleCount * kOutputCount * 4);
+    uint32_t totalDurationMs = static_cast<uint32_t>(endTimeMs_ - startTimeMs_);
+    uint32_t perCombo = totalDurationMs / std::max<uint32_t>(1, totalCombos);
+    return std::max<uint32_t>(1000, std::min<uint32_t>(2000, perCombo));
+  }
+
+  bool ensureComboWindow() {
+    uint32_t now = millis();
+    if (comboStartMs_ == 0 || now >= comboEndMs_) {
+      currentSettings_ = currentSettings();
+      ++attempt_;
+      queueStatus(buildAttemptLine(currentSettings_));
+      comboStartMs_ = now;
+      comboEndMs_ = now + comboDurationMs();
+      advance();
+    }
+    return true;
+  }
+
+  void advance() {
+    ++preambleIndex_;
+    if (preambleIndex_ >= kPreambleCount) {
+      preambleIndex_ = 0;
+      ++functionIndex_;
+      if (functionIndex_ >= 4) {
+        functionIndex_ = 0;
+        ++invertIndex_;
+        if (invertIndex_ >= kInvertCount) {
+          invertIndex_ = 0;
+          ++outputIndex_;
+          if (outputIndex_ >= kOutputCount) {
+            outputIndex_ = 0;
+          }
+        }
+      }
+    }
+  }
+
+  void finish(const String &status) {
+    active_ = false;
+    stopRequested_ = false;
+    tx_.setBaud(savedBaud_);
+    tx_.setInvert(savedInvert_);
+    tx_.setIdleHigh(savedIdleHigh_);
+    tx_.setOutputMode(savedOutputMode_);
+    queueStatus(status);
+  }
+
+  PocsagTx &tx_;
+  bool active_ = false;
+  bool stopRequested_ = false;
+  uint32_t capcode_ = 0;
+  uint32_t startTimeMs_ = 0;
+  uint32_t endTimeMs_ = 0;
+  uint32_t comboStartMs_ = 0;
+  uint32_t comboEndMs_ = 0;
+  uint32_t nextAllowedMs_ = 0;
+  size_t attempt_ = 0;
+  size_t invertIndex_ = 0;
+  size_t functionIndex_ = 0;
+  size_t preambleIndex_ = 0;
+  size_t outputIndex_ = 0;
+  AutotestFastSettings currentSettings_;
+  uint32_t savedBaud_ = kDefaultBaud;
+  bool savedInvert_ = kDefaultInvert;
+  bool savedIdleHigh_ = kDefaultIdleLineHigh;
+  OutputMode savedOutputMode_ = kDefaultOutputMode;
+};
+
+constexpr bool AutotestFastController::kInverts[];
+constexpr uint32_t AutotestFastController::kPreamblesMs[];
+constexpr OutputMode AutotestFastController::kOutputModes[];
+
+class MinLoopController {
+ public:
+  explicit MinLoopController(PocsagTx &tx) : tx_(tx) {}
+
+  void start(uint32_t capcode, uint8_t functionBits, uint32_t preambleMs,
+             uint32_t durationSeconds) {
+    capcode_ = capcode;
+    functionBits_ = functionBits;
+    preambleMs_ = preambleMs;
+    endTimeMs_ = millis() + durationSeconds * 1000;
+    nextAllowedMs_ = 0;
+    active_ = true;
+    stopRequested_ = false;
+  }
+
+  void requestStop() { stopRequested_ = true; }
+
+  bool isActive() const { return active_; }
+
+  void update() {
+    if (!active_) {
+      return;
+    }
+    if (stopRequested_ || millis() >= endTimeMs_) {
+      finish(stopRequested_ ? "STATUS SEND_MIN_LOOP STOPPED" : "STATUS SEND_MIN_LOOP DONE");
+      return;
+    }
+    if (tx_.isBusy()) {
+      return;
+    }
+    if (millis() < nextAllowedMs_) {
+      return;
+    }
+    if (!send_min_page(capcode_, functionBits_, preambleMs_)) {
+      queueStatus("ERROR SEND_MIN_LOOP TX_BUSY");
+      return;
+    }
+    nextAllowedMs_ = millis() + kLoopGapMs;
+  }
+
+ private:
+  static constexpr uint32_t kLoopGapMs = 200;
+
+  void finish(const String &status) {
+    active_ = false;
+    stopRequested_ = false;
+    queueStatus(status);
+  }
+
+  PocsagTx &tx_;
+  bool active_ = false;
+  bool stopRequested_ = false;
+  uint32_t capcode_ = 0;
+  uint8_t functionBits_ = 0;
+  uint32_t preambleMs_ = 0;
+  uint32_t endTimeMs_ = 0;
+  uint32_t nextAllowedMs_ = 0;
+};
+
 class Autotest2Controller {
  public:
   explicit Autotest2Controller(PocsagTx &tx) : tx_(tx) {}
@@ -1408,7 +1647,9 @@ static PocsagTx tx;
 static PageStore pageStore(kPageStoreCapacity);
 static ProbeController probe(tx, encoder);
 static AutotestController autotest(tx, encoder);
+static AutotestFastController autotestFast(tx);
 static Autotest2Controller autotest2(tx);
+static MinLoopController minLoop(tx);
 static CommandParser parser;
 
 static std::deque<TxRequest> txQueue;
@@ -1423,6 +1664,9 @@ static bool configuredIdleHigh = kDefaultIdleLineHigh;
 static bool configuredAutoProbe = false;
 static bool pendingStoredPage = false;
 static bool capGrpWasExplicitlySet = false;
+static uint8_t configuredDefaultFunction = kDefaultFunctionBits;
+static uint32_t configuredDefaultPreambleMs = kDefaultPreambleMs;
+static bool pendingDebugScope = false;
 
 static String serialBuffer;
 
@@ -1549,8 +1793,30 @@ bool send_min_page(InjectionProfile profile, uint32_t capcode, uint8_t functionB
   return tx.sendBits(std::move(waveform.bits));
 }
 
+bool send_min_page_with_settings(uint32_t capcode, uint8_t functionBits, uint32_t preambleMs,
+                                 uint32_t baud, bool invert, bool idleHigh,
+                                 OutputMode outputMode) {
+  uint32_t preambleBits = preambleBitsFromMs(baud, preambleMs);
+  std::vector<uint8_t> nrzBits = buildMinimalNrzBits(encoder, capcode, functionBits, preambleBits);
+  if (nrzBits.empty()) {
+    return false;
+  }
+  tx.setOutputMode(outputMode);
+  tx.setInvert(invert);
+  tx.setIdleHigh(idleHigh);
+  tx.setBaud(baud);
+  return tx.sendBits(std::move(nrzBits));
+}
+
+bool send_min_page(uint32_t capcode, uint8_t functionBits, uint32_t preambleMs) {
+  return send_min_page_with_settings(capcode, functionBits, preambleMs, configuredBaud,
+                                     configuredInvert, configuredIdleHigh,
+                                     configuredOutputMode);
+}
+
 String buildStatusLine() {
-  String status = "STATUS CAPIND=" + String(configuredCapcodeInd) +
+  String status = "STATUS CAPCODE=" + String(configuredCapcodeInd) +
+                  " CAPIND=" + String(configuredCapcodeInd) +
                   " CAPGRP=" + String(configuredCapcodeGrp) +
                   " BAUD=" + String(configuredBaud) +
                   " INVERT=" + String(configuredInvert ? 1 : 0) +
@@ -1559,6 +1825,8 @@ String buildStatusLine() {
                   String(configuredOutputMode == OutputMode::kPushPull ? "PUSH_PULL"
                                                                        : "OPEN_DRAIN") +
                   " DATA_GPIO=" + String(configuredDataGpio) +
+                  " FUNCTION=" + String(configuredDefaultFunction) +
+                  " PREAMBLE_MS=" + String(configuredDefaultPreambleMs) +
                   (configuredGpioList.length() > 0
                        ? " GPIO_LIST=" + configuredGpioList
                        : "") +
@@ -1659,7 +1927,7 @@ void handleCommand(const std::vector<String> &tokens) {
   if (cmd == "SET_MODE" && tokens.size() >= 2) {
     String value = tokens[1];
     value.toUpperCase();
-    if (value == "OPENDRAIN" || value == "OPEN_DRAIN") {
+    if (value == "OPENDRAIN" || value == "OPEN_DRAIN" || value == "OPEN_COLLECTOR") {
       configuredOutputMode = OutputMode::kOpenDrain;
     } else if (value == "PUSHPULL" || value == "PUSH_PULL") {
       configuredOutputMode = OutputMode::kPushPull;
@@ -1713,28 +1981,82 @@ void handleCommand(const std::vector<String> &tokens) {
     return;
   }
   if (cmd == "DEBUG_SCOPE") {
-    std::vector<uint8_t> bits = buildAlternatingBits(2000);
-    enqueueRawBits(std::move(bits), "DEBUG_SCOPE");
-    queueStatus("STATUS DEBUG_SCOPE QUEUED");
+    if (tx.isBusy()) {
+      queueStatus("ERROR DEBUG_SCOPE TX_BUSY");
+      return;
+    }
+    std::vector<uint8_t> bits = buildAlternatingBitsForBaud(2000, configuredBaud);
+    tx.setOutputMode(configuredOutputMode);
+    tx.setInvert(configuredInvert);
+    tx.setIdleHigh(configuredIdleHigh);
+    tx.setBaud(configuredBaud);
+    if (!tx.sendBits(std::move(bits))) {
+      queueStatus("ERROR DEBUG_SCOPE TX_BUSY");
+      return;
+    }
+    pendingDebugScope = true;
+    queueStatus("STATUS DEBUG_SCOPE START");
     return;
   }
   if (cmd == "SEND_MIN" && tokens.size() >= 3) {
     uint32_t capcode = 0;
     uint8_t functionBits = 0;
+    uint32_t preambleMs = configuredDefaultPreambleMs;
     if (!parseUint32(tokens[1], capcode) || !parseFunctionBits(tokens[2], functionBits)) {
       queueStatus("ERROR SEND_MIN INVALID");
       return;
+    }
+    if (tokens.size() >= 4) {
+      if (!parseUint32(tokens[3], preambleMs) || preambleMs == 0) {
+        queueStatus("ERROR SEND_MIN PREAMBLE");
+        return;
+      }
     }
     if (tx.isBusy()) {
       queueStatus("ERROR SEND_MIN TX_BUSY");
       return;
     }
-    if (!send_min_page(InjectionProfile::kNrzSliced, capcode, functionBits, configuredBaud,
-                       configuredInvert, configuredIdleHigh, kPreambleBits)) {
+    configuredDefaultFunction = functionBits;
+    configuredDefaultPreambleMs = preambleMs;
+    if (!send_min_page(capcode, functionBits, preambleMs)) {
       queueStatus("ERROR SEND_MIN TX_BUSY");
       return;
     }
-    queueStatus("STATUS MIN START");
+    queueStatus("STATUS MIN START capcode=" + String(capcode) +
+                " func=" + String(functionBits) + " preamble=" + String(preambleMs) + "ms");
+    return;
+  }
+  if (cmd == "SEND_MIN_LOOP" && tokens.size() >= 5) {
+    uint32_t capcode = 0;
+    uint8_t functionBits = 0;
+    uint32_t preambleMs = 0;
+    uint32_t durationSeconds = 0;
+    if (!parseUint32(tokens[1], capcode) || !parseFunctionBits(tokens[2], functionBits) ||
+        !parseUint32(tokens[3], preambleMs) || preambleMs == 0 ||
+        !parseUint32(tokens[4], durationSeconds) || durationSeconds == 0) {
+      queueStatus("ERROR SEND_MIN_LOOP INVALID");
+      return;
+    }
+    if (autotest.isActive() || autotest2.isActive() || autotestFast.isActive()) {
+      queueStatus("ERROR SEND_MIN_LOOP BUSY");
+      return;
+    }
+    if (minLoop.isActive()) {
+      queueStatus("ERROR SEND_MIN_LOOP BUSY");
+      return;
+    }
+    if (tx.isBusy()) {
+      queueStatus("ERROR SEND_MIN_LOOP TX_BUSY");
+      return;
+    }
+    if (probe.isActive()) {
+      probe.stop();
+    }
+    configuredDefaultFunction = functionBits;
+    configuredDefaultPreambleMs = preambleMs;
+    minLoop.start(capcode, functionBits, preambleMs, durationSeconds);
+    queueStatus("STATUS SEND_MIN_LOOP START capcode=" + String(capcode) +
+                " func=" + String(functionBits) + " preamble=" + String(preambleMs) + "ms");
     return;
   }
   if (cmd == "SEND_SYNC") {
@@ -1784,6 +2106,43 @@ void handleCommand(const std::vector<String> &tokens) {
     autotest.start(capcode, durationSeconds, configuredBaud, configuredInvert,
                    configuredIdleHigh);
     queueStatus("STATUS AUTOTEST START");
+    return;
+  }
+  if (cmd == "AUTOTEST_FAST" && tokens.size() >= 2) {
+    String value = tokens[1];
+    value.toUpperCase();
+    if (value == "STOP") {
+      if (!autotestFast.isActive()) {
+        queueStatus("ERROR AUTOTEST_FAST NOT_ACTIVE");
+        return;
+      }
+      autotestFast.requestStop();
+      if (!tx.isBusy()) {
+        autotestFast.update();
+      }
+      return;
+    }
+    uint32_t durationSeconds = 60;
+    if (!parseUint32(tokens[1], durationSeconds) || durationSeconds == 0) {
+      queueStatus("ERROR AUTOTEST_FAST DURATION");
+      return;
+    }
+    if (autotestFast.isActive() || autotest.isActive() || autotest2.isActive() ||
+        minLoop.isActive()) {
+      queueStatus("ERROR AUTOTEST_FAST BUSY");
+      return;
+    }
+    if (tx.isBusy()) {
+      queueStatus("ERROR AUTOTEST_FAST TX_BUSY");
+      return;
+    }
+    if (probe.isActive()) {
+      probe.stop();
+    }
+    autotestFast.start(durationSeconds, configuredBaud, configuredInvert, configuredIdleHigh,
+                       configuredOutputMode);
+    queueStatus("STATUS AUTOTEST_FAST START capcode=" + String(kDefaultCapcodeInd) +
+                " baud=512");
     return;
   }
   if (cmd == "AUTOTEST2" && tokens.size() >= 2) {
@@ -1939,7 +2298,7 @@ void handleCommand(const std::vector<String> &tokens) {
     if (key == "OUTPUT") {
       String value = tokens[2];
       value.toUpperCase();
-      if (value == "OPEN_DRAIN") {
+      if (value == "OPEN_DRAIN" || value == "OPEN_COLLECTOR") {
         configuredOutputMode = OutputMode::kOpenDrain;
       } else if (value == "PUSH_PULL") {
         configuredOutputMode = OutputMode::kPushPull;
@@ -2248,6 +2607,10 @@ void setup() {
 void loop() {
   if (tx.consumeDoneFlag()) {
     queueStatus("TX_DONE");
+    if (pendingDebugScope) {
+      pendingDebugScope = false;
+      queueStatus("DEBUG_SCOPE done");
+    }
     if (pendingStoredPage) {
       pageStore.updateLatestResult("TX_DONE");
       saveSettings();
@@ -2255,7 +2618,11 @@ void loop() {
     }
   }
 
-  if (autotest2.isActive()) {
+  if (minLoop.isActive()) {
+    minLoop.update();
+  } else if (autotestFast.isActive()) {
+    autotestFast.update();
+  } else if (autotest2.isActive()) {
     autotest2.update();
   } else if (autotest.isActive()) {
     autotest.update();
