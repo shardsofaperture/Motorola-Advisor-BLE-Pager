@@ -69,6 +69,13 @@ enum class InjectionProfile : uint8_t {
   kSlicerEdgePulse = 4,
 };
 
+extern OutputMode configuredOutputMode;
+
+bool send_min_page(InjectionProfile profile, uint32_t capcode, uint8_t functionBits,
+                   uint32_t baud, bool invert, bool idleHigh, uint32_t preambleBits);
+
+std::vector<int> parseGpioList(const String &value);
+
 class PageStore {
  public:
   explicit PageStore(size_t capacity) : capacity_(capacity) {}
@@ -1404,7 +1411,7 @@ static uint32_t configuredCapcodeInd = kDefaultCapcodeInd;
 static uint32_t configuredCapcodeGrp = kDefaultCapcodeGrp;
 static uint32_t configuredBaud = kDefaultBaud;
 static bool configuredInvert = kDefaultInvert;
-static OutputMode configuredOutputMode = OutputMode::kOpenDrain;
+OutputMode configuredOutputMode = OutputMode::kOpenDrain;
 static int configuredDataGpio = kDataGpio;
 static String configuredGpioList;
 static bool configuredIdleHigh = kDefaultIdleLineHigh;
