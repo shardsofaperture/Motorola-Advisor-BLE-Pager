@@ -995,7 +995,7 @@ class AutotestController {
     uint32_t preambleBits = 576;
   };
 
-  static constexpr uint32_t kBauds[] = {512, 1200, 2400};
+  static constexpr uint32_t kBauds[] = {512};
   static constexpr bool kInverts[] = {false, true};
   static constexpr bool kIdleHighs[] = {true, false};
   static constexpr uint32_t kPreambles[] = {576, 1152, 2304};
@@ -1114,7 +1114,6 @@ class AutotestFastController {
     invertIndex_ = 0;
     functionIndex_ = 0;
     preambleIndex_ = 0;
-    outputIndex_ = 0;
     stopRequested_ = false;
     active_ = true;
     nextAllowedMs_ = 0;
@@ -1123,6 +1122,7 @@ class AutotestFastController {
     savedInvert_ = savedInvert;
     savedIdleHigh_ = savedIdleHigh;
     savedOutputMode_ = savedOutputMode;
+    tx_.setOutputMode(OutputMode::kOpenDrain);
   }
 
   void requestStop() { stopRequested_ = true; }
@@ -1150,7 +1150,7 @@ class AutotestFastController {
     if (!send_min_page_with_settings(capcode_, currentSettings_.functionBits,
                                      currentSettings_.preambleMs, kFixedBaud,
                                      currentSettings_.invert, configuredIdleHigh,
-                                     currentSettings_.outputMode)) {
+                                     OutputMode::kOpenDrain)) {
       queueStatus("ERROR AUTOTEST_FAST TX_BUSY");
       return;
     }
@@ -1162,43 +1162,35 @@ class AutotestFastController {
     bool invert = false;
     uint8_t functionBits = 0;
     uint32_t preambleMs = 800;
-    OutputMode outputMode = OutputMode::kOpenDrain;
   };
 
   static constexpr uint32_t kFixedBaud = 512;
   static constexpr bool kInverts[] = {false, true};
   static constexpr uint32_t kPreamblesMs[] = {800, 1500, 2500};
-  static constexpr OutputMode kOutputModes[] = {OutputMode::kOpenDrain,
-                                                OutputMode::kPushPull};
   static constexpr size_t kInvertCount = sizeof(kInverts) / sizeof(kInverts[0]);
   static constexpr size_t kPreambleCount = sizeof(kPreamblesMs) / sizeof(kPreamblesMs[0]);
-  static constexpr size_t kOutputCount = sizeof(kOutputModes) / sizeof(kOutputModes[0]);
   static constexpr uint32_t kFastGapMs = 200;
+  static constexpr uint32_t kComboDurationMs = 1000;
 
   AutotestFastSettings currentSettings() const {
     AutotestFastSettings settings;
     settings.invert = kInverts[invertIndex_];
     settings.functionBits = static_cast<uint8_t>(functionIndex_);
     settings.preambleMs = kPreamblesMs[preambleIndex_];
-    settings.outputMode = kOutputModes[outputIndex_];
     return settings;
   }
 
   String buildAttemptLine(const AutotestFastSettings &settings) const {
     String line = "FAST invert=" + String(settings.invert ? 1 : 0) +
                   " func=" + String(settings.functionBits) +
-                  " preamble=" + String(settings.preambleMs) + "ms output=" +
-                  String(settings.outputMode == OutputMode::kOpenDrain ? "OPEN_DRAIN"
-                                                                       : "PUSH_PULL");
+                  " preamble=" + String(settings.preambleMs) + "ms output=OPEN_DRAIN";
     return line;
   }
 
   uint32_t comboDurationMs() const {
-    uint32_t totalCombos =
-        static_cast<uint32_t>(kInvertCount * kPreambleCount * kOutputCount * 4);
-    uint32_t totalDurationMs = static_cast<uint32_t>(endTimeMs_ - startTimeMs_);
-    uint32_t perCombo = totalDurationMs / std::max<uint32_t>(1, totalCombos);
-    return std::max<uint32_t>(1000, std::min<uint32_t>(2000, perCombo));
+    (void)startTimeMs_;
+    (void)endTimeMs_;
+    return kComboDurationMs;
   }
 
   bool ensureComboWindow() {
@@ -1224,10 +1216,6 @@ class AutotestFastController {
         ++invertIndex_;
         if (invertIndex_ >= kInvertCount) {
           invertIndex_ = 0;
-          ++outputIndex_;
-          if (outputIndex_ >= kOutputCount) {
-            outputIndex_ = 0;
-          }
         }
       }
     }
@@ -1256,7 +1244,6 @@ class AutotestFastController {
   size_t invertIndex_ = 0;
   size_t functionIndex_ = 0;
   size_t preambleIndex_ = 0;
-  size_t outputIndex_ = 0;
   AutotestFastSettings currentSettings_;
   uint32_t savedBaud_ = kDefaultBaud;
   bool savedInvert_ = kDefaultInvert;
@@ -1266,7 +1253,6 @@ class AutotestFastController {
 
 constexpr bool AutotestFastController::kInverts[];
 constexpr uint32_t AutotestFastController::kPreamblesMs[];
-constexpr OutputMode AutotestFastController::kOutputModes[];
 
 class MinLoopController {
  public:
@@ -1674,6 +1660,7 @@ static bool capGrpWasExplicitlySet = false;
 static uint8_t configuredDefaultFunction = kDefaultFunctionBits;
 static uint32_t configuredDefaultPreambleMs = kDefaultPreambleMs;
 static bool pendingDebugScope = false;
+static uint32_t debugScopeRestoreBaud = kDefaultBaud;
 
 static String serialBuffer;
 
@@ -1816,7 +1803,7 @@ bool send_min_page_with_settings(uint32_t capcode, uint8_t functionBits, uint32_
 }
 
 bool send_min_page(uint32_t capcode, uint8_t functionBits, uint32_t preambleMs) {
-  return send_min_page_with_settings(capcode, functionBits, preambleMs, configuredBaud,
+  return send_min_page_with_settings(capcode, functionBits, preambleMs, kDefaultBaud,
                                      configuredInvert, configuredIdleHigh,
                                      configuredOutputMode);
 }
@@ -1992,11 +1979,12 @@ void handleCommand(const std::vector<String> &tokens) {
       queueStatus("ERROR DEBUG_SCOPE TX_BUSY");
       return;
     }
-    std::vector<uint8_t> bits = buildAlternatingBitsForBaud(2000, configuredBaud);
+    std::vector<uint8_t> bits = buildAlternatingBitsForBaud(2000, kDefaultBaud);
     tx.setOutputMode(configuredOutputMode);
     tx.setInvert(configuredInvert);
     tx.setIdleHigh(configuredIdleHigh);
-    tx.setBaud(configuredBaud);
+    debugScopeRestoreBaud = configuredBaud;
+    tx.setBaud(kDefaultBaud);
     if (!tx.sendBits(std::move(bits))) {
       queueStatus("ERROR DEBUG_SCOPE TX_BUSY");
       return;
@@ -2149,7 +2137,7 @@ void handleCommand(const std::vector<String> &tokens) {
     autotestFast.start(durationSeconds, configuredBaud, configuredInvert, configuredIdleHigh,
                        configuredOutputMode);
     queueStatus("STATUS AUTOTEST_FAST START capcode=" + String(kDefaultCapcodeInd) +
-                " baud=512");
+                " baud=512 output=OPEN_DRAIN");
     return;
   }
   if (cmd == "AUTOTEST2" && tokens.size() >= 2) {
@@ -2616,6 +2604,7 @@ void loop() {
     queueStatus("TX_DONE");
     if (pendingDebugScope) {
       pendingDebugScope = false;
+      tx.setBaud(debugScopeRestoreBaud);
       queueStatus("DEBUG_SCOPE done");
     }
     if (pendingStoredPage) {

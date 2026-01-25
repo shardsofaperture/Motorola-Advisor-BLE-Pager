@@ -3,18 +3,18 @@
 > **Status: Work in progress / not functional yet.** This project is still under active development and **does not currently work with Motorola Advisor II pagers**. Do not rely on it for production use.
 
 ## What this does (no RF)
-This project turns a Seeed XIAO ESP32-S3 into a BLE/Serial bridge that injects a **POCSAG baseband NRZ stream** directly into a Motorola Advisor II logic board. The RF board is removed; the ESP32 drives the **DATA injection node** on the logic board (continuity to the RF board’s **TA31142 pin 15** net). The pager logic board decodes POCSAG exactly like it would from RF.  
+This project turns a Seeed XIAO ESP32-S3 into a BLE/Serial bridge that injects a **POCSAG baseband NRZ stream** directly into a Motorola Advisor II logic board. The ESP32 drives the RF board connector **pin labeled “DATA”** (post-limiter, post-slicer, pre-ASIC), which is the correct injection point per the service manual. The pager logic board decodes POCSAG exactly like it would from RF.  
 
 ## Wiring / Injection (Advisor II)
 ### Required
 - **ESP32 GND → pager GND** (common ground is mandatory).  
-  - Tie to **TA31142 pin 19** or a nearby ground plane on the RF board.
-- **ESP32 GPIO3 (D2) → TA31142 pin 15 net**  
-  - **Recommended:** insert a **1k–2k series resistor** in-line from GPIO3 to the injection node.
-  - **Best practice:** isolate the TA31142 output by **lifting pin 15** or **cutting the trace**, then inject on the **downstream side** toward the logic board.
+  - Tie to a nearby RF board ground plane.
+- **ESP32 GPIO3 (D2) → RF board connector pin labeled “DATA”**  
+  - **Recommended:** insert a **1k–2k series resistor** in-line from GPIO3 to the DATA pin.
+  - The DATA pin is **post-limiter, post-slicer, pre-ASIC** per the service manual.
 
 ### Drive style
-By default the firmware drives **open-drain** for TA31142 injection:
+By default the firmware drives **open-drain** for DATA injection:
 - **Logic 1 / idle**: GPIO3 set to **INPUT (hi-Z)**
 - **Logic 0**: GPIO3 driven **OUTPUT LOW**
 
@@ -27,30 +27,17 @@ If you want PROBE auto-detect to work, wire the pager’s alert indication to **
 - Suggested sources: **buzzer drive** line or **LED/backlight** line.
 - Use a simple conditioning network if needed (e.g., resistor divider or transistor) to make a clean 3.3 V logic signal.
 
-## Advisor II bring-up (RF board installed, data isolated)
-When the RF board is installed for battery-save wake, keep the RF hardware present but **isolate the data path** so the ESP32 is the only driver of TSP2.
+## Correct Injection Point (Verified by Service Manual)
+- **Use the RF board connector pin labeled “DATA.”**
+- This node is **post-limiter, post-slicer, pre-ASIC** and carries raw POCSAG NRZ.
+- **Do not inject** at TA31142 pads, discriminator/audio points, or **TSP pads**—those are not valid injection points for raw NRZ.
+- The DATA pin behaves as an **open-collector line** (internal pull-up); the injector must only **pull low** or **float**.
 
-**Wiring checklist**
-- Keep the **RF board installed** so the pager stays awake.
-- **Disconnect** the RF data net: **RF chip pin 15 → header pin 3 → TSP2** (cut trace or lift pin).
-- Inject the ESP32 DATA output into **TSP2** through a **1k series resistor**.
-- Share **common ground** between the ESP32 and pager logic board.
-
-**Command checklist**
-- Use **open-drain** mode:
-  ```
-  SET OUTPUT OPEN_DRAIN
-  ```
-- Send a minimal bring-up page first:
-  ```
-  SEND_MIN <capcode> <function 0-3> <preamble_ms>
-  ```
-- If there’s no response, toggle polarity and retry:
-  ```
-  SET INVERT 1
-  SEND_MIN <capcode> <function 0-3> <preamble_ms>
-  ```
-- `TEST CARRIER` is **only for scope timing** (not for alerting).
+**Bring-up steps (service-manual compliant)**
+1. Wire GPIO3 to the **RF board DATA pin** with a 1k–2k series resistor.
+2. Run `DEBUG_SCOPE` on the DATA pin to confirm 512 bps timing.
+3. Run `AUTOTEST_FAST 60` to sweep invert/function/preamble.
+4. Lock the winning combo once the pager alerts.
 
 ## Bring-up checklist (known: POCSAG, 512 bps, capcode 123456)
 **Known values**
@@ -60,20 +47,15 @@ When the RF board is installed for battery-save wake, keep the RF hardware prese
 
 **Recommended starting config**
 - **OUTPUT:** `OPEN_DRAIN` (open-collector)
-- Sweep **INVERT** via `AUTOTEST_FAST` instead of changing capcodes.
-
-**Suggested injection points to try (not guaranteed)**
-- RF header **DATA** pin (commonly pin 4 in related Advisor projects).
-- RF header **wake/pulse** pin (commonly pin 7) to confirm pager activity.
-- **TSP2-related pads** only as a secondary option.
+- Sweep **INVERT/FUNCTION/PREAMBLE** via `AUTOTEST_FAST` instead of changing capcodes.
 
 **Suggested test flow**
-1. Run `DEBUG_SCOPE` at 512 on the chosen injection point.
-2. Run `AUTOTEST_FAST 60` while moving the clip/probe.
+1. Run `DEBUG_SCOPE` at 512 on the RF DATA pin.
+2. Run `AUTOTEST_FAST 60` while monitoring for an alert.
 3. If any beep/alert is observed, lock that combo and use `SEND_MIN_LOOP` for longer.
 
 ## No RF service bring-up
-On some logic board revisions, **TSP2 may not accept raw sliced NRZ** or the node may be gated/conditioned. If AUTOTEST never decodes, move the injection wire to other test pads and brute-force different signal styles.
+If AUTOTEST never decodes, confirm the wiring is on the **RF board DATA pin** and the line is **open-collector**. Other pads (TA31142, discriminator audio, TSP) are not valid for raw NRZ injection.
 
 ### Injection profiles (signal styles)
 - **NRZ_SLICED**: raw NRZ bits at the baud rate. Intended for **post-slicer digital nodes** (TSP2).
@@ -238,7 +220,7 @@ SEND_TEST
 ```
 
 ### DEBUG_SCOPE
-Emit a 2-second 1010 pattern at the current baud using the selected output mode, then stop.
+Emit a 2-second 1010 pattern at **512 bps** using the selected output mode, then stop.
 ```
 DEBUG_SCOPE
 ```
@@ -278,15 +260,15 @@ SEND_SYNC
 ```
 
 ### AUTOTEST <capcode> [seconds]
-Sweep baud/invert/idle/function/preamble combinations to brute-force a working page.
+Sweep invert/idle/function/preamble combinations to brute-force a working page (baud locked to 512).
 ```
 AUTOTEST 123456 120
 ```
 Notes:
 - POCSAG maps capcodes to RF addresses via **capcode / 2**, so **123456** and **123457**
   target the same address; the function bits differentiate them.
-- AUTOTEST tries baud **512/1200/2400**, invert **0/1**, idle **1/0**, function **0-3**,
-  and preamble lengths **576/1152/2304**.
+- AUTOTEST tries invert **0/1**, idle **1/0**, function **0-3**, and preamble lengths
+  **576/1152/2304** (baud fixed at **512 bps**).
 
 ### AUTOTEST2 <capcode> [seconds]
 Sweeps **profiles + baud + invert + idle + function + preamble** and iterates across GPIOs in the
@@ -308,7 +290,7 @@ AUTOTEST2 STOP
 ```
 
 ### AUTOTEST_FAST <seconds>
-Fast deterministic sweep for bring-up (fixed capcode 123456 at 512 bps, no capcode sweep).
+Fast deterministic sweep for bring-up (fixed capcode **123456** at **512 bps**, output **OPEN_DRAIN**).
 ```
 AUTOTEST_FAST 60
 ```
@@ -381,20 +363,27 @@ SAVE
    ```
 6. If you need auto-probe, wire ALERT_GPIO and use `PROBE START` or `PROBE BINARY`.
 
-## Recommended settings (Advisor II TA31142 injection)
+## First power-on test (serial commands)
+Run these commands in order on the serial console to validate the DATA pin wiring:
+```
+STATUS
+DEBUG_SCOPE
+AUTOTEST_FAST 60
+```
+
+## Recommended settings (Advisor II RF DATA injection)
 - **BAUD:** 512  
 - **INVERT:** 0  
 - **OUTPUT:** OPEN_DRAIN  
 - **CAPCODES:** 123456 (individual) / 123457 (group)
 
 ## Injecting into logic board (no RF board)
-When the RF/IF board is removed, the logic board still expects **sliced data** on the node that
-normally connects to the RF detector’s **FSK OUT / sliced data** line. Wire:
+When the RF board is removed, inject into the **logic board connector pin that mates with the RF board’s DATA pin** (same DATA net). Wire:
 - **GND → logic board GND**
-- **DATA → logic board DATA-IN node** (the same net that previously went to RF board FSK OUT)
+- **DATA → logic board RF connector DATA pin**
 
 ## Troubleshooting (top 3)
-1. **Wrong pad / net**: confirm you are on the logic board’s DATA-IN node (the RF board’s FSK OUT net).
+1. **Wrong pad / net**: confirm you are on the RF board connector **DATA** pin (service manual).
 2. **Wrong polarity**: try toggling invert (`SET_INVERT 1`) if you see activity but no decode.
 3. **Missing pull-up / mode mismatch**: switch between push-pull and open-drain (`SET_MODE opendrain`).
 
@@ -422,7 +411,7 @@ normally connects to the RF detector’s **FSK OUT / sliced data** line. Wire:
 - **Pager wakes but won’t decode**  
   Toggle `SET INVERT 0/1`. The DATA line polarity must match the logic board.
 - **Nothing happens at all**  
-  Verify **common ground** and the DATA injection node continuity to the TA31142 pin 15 net.
+  Verify **common ground** and the DATA injection node continuity to the RF board connector **DATA** pin.
 - **Probe doesn’t auto-save capcodes**  
   `PROBE START` and `PROBE BINARY` **require ALERT_GPIO**. If ALERT_GPIO isn’t wired, you’ll get `ERROR PROBE NO_ALERT_GPIO`. Use `PROBE ONESHOT` and watch the pager manually.
 
