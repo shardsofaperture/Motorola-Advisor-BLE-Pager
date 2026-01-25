@@ -43,14 +43,34 @@ When the RF board is installed for battery-save wake, keep the RF hardware prese
   ```
 - Send a minimal bring-up page first:
   ```
-  SEND_MIN <capcode> <function 0-3>
+  SEND_MIN <capcode> <function 0-3> <preamble_ms>
   ```
 - If there’s no response, toggle polarity and retry:
   ```
   SET INVERT 1
-  SEND_MIN <capcode> <function 0-3>
+  SEND_MIN <capcode> <function 0-3> <preamble_ms>
   ```
 - `TEST CARRIER` is **only for scope timing** (not for alerting).
+
+## Bring-up checklist (known: POCSAG, 512 bps, capcode 123456)
+**Known values**
+- **Protocol:** POCSAG
+- **Baud:** 512 bps
+- **Capcode:** 123456
+
+**Recommended starting config**
+- **OUTPUT:** `OPEN_DRAIN` (open-collector)
+- Sweep **INVERT** via `AUTOTEST_FAST` instead of changing capcodes.
+
+**Suggested injection points to try (not guaranteed)**
+- RF header **DATA** pin (commonly pin 4 in related Advisor projects).
+- RF header **wake/pulse** pin (commonly pin 7) to confirm pager activity.
+- **TSP2-related pads** only as a secondary option.
+
+**Suggested test flow**
+1. Run `DEBUG_SCOPE` at 512 on the chosen injection point.
+2. Run `AUTOTEST_FAST 60` while moving the clip/probe.
+3. If any beep/alert is observed, lock that combo and use `SEND_MIN_LOOP` for longer.
 
 ## No RF service bring-up
 On some logic board revisions, **TSP2 may not accept raw sliced NRZ** or the node may be gated/conditioned. If AUTOTEST never decodes, move the injection wire to other test pads and brute-force different signal styles.
@@ -101,7 +121,7 @@ Open the serial monitor at 115200 baud. Type the same commands as BLE (ending wi
 Commands are **plain text** and case-insensitive. Examples show the exact text to send.
 
 ### STATUS
-Shows a single-line summary (capcodes/baud/invert/pins/pages).
+Shows a single-line summary including baud/invert/output/data GPIO plus default function/preamble.
 ```
 STATUS
 ```
@@ -137,7 +157,7 @@ SET BAUD 1200
 SET INVERT 1
 ```
 
-### SET OUTPUT <PUSH_PULL|OPEN_DRAIN>
+### SET OUTPUT <PUSH_PULL|OPEN_DRAIN|OPEN_COLLECTOR>
 ```
 SET OUTPUT PUSH_PULL
 ```
@@ -217,6 +237,12 @@ Send a 2-second 1010 test pattern, then a full preamble + sync + one batch.
 SEND_TEST
 ```
 
+### DEBUG_SCOPE
+Emit a 2-second 1010 pattern at the current baud using the selected output mode, then stop.
+```
+DEBUG_SCOPE
+```
+
 ### SEND_ADDR <capcode> <function 0-3>
 ```
 SEND_ADDR 123456 0
@@ -233,10 +259,16 @@ Inject already-encoded 32-bit codewords (useful for bring-up).
 SEND_CODEWORDS 0x7CD215D8 0x12345678 0x7A89C197
 ```
 
-### SEND_MIN <capcode> <function 0-3>
-Send a 2-second alternating preamble followed by a single batch (sync + address + idle).
+### SEND_MIN <capcode> <function 0-3> <preamble_ms>
+Send a minimal page burst: preamble (1010) + sync + one batch with only the address codeword.
 ```
-SEND_MIN 123456 0
+SEND_MIN 123456 0 1500
+```
+
+### SEND_MIN_LOOP <capcode> <function 0-3> <preamble_ms> <seconds>
+Repeat the minimal page burst until timeout.
+```
+SEND_MIN_LOOP 123456 0 1500 30
 ```
 
 ### SEND_SYNC
@@ -273,6 +305,12 @@ Profiles tested:
 Stop a running AUTOTEST2 early.
 ```
 AUTOTEST2 STOP
+```
+
+### AUTOTEST_FAST <seconds>
+Fast deterministic sweep for bring-up (fixed capcode 123456 at 512 bps, no capcode sweep).
+```
+AUTOTEST_FAST 60
 ```
 
 ### AUTOTEST STOP
