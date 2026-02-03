@@ -23,8 +23,7 @@ struct Config {
   uint32_t capInd = 1422890;
   uint32_t capGrp = 1422890;
   uint8_t functionBits = 0;
-  int dataGpio = 3;
-  int rfSenseGpio = -1;
+  int dataGpio = 4;
 };
 
 static Config config;
@@ -39,12 +38,7 @@ static bool txInvert = false;
 static bool txIdleHigh = true;
 static OutputMode txOutput = OutputMode::kOpenDrain;
 static bool txOdPullup = false;
-static int txGpio = 3;
-
-static volatile uint32_t rfSenseCount = 0;
-static volatile uint32_t rfSenseLastMs = 0;
-static volatile uint64_t rfSensePeriodTotal = 0;
-static volatile uint32_t rfSensePeriodCount = 0;
+static int txGpio = 4;
 
 class PocsagEncoder {
  public:
@@ -219,9 +213,11 @@ static bool startTx(const std::vector<uint8_t> &bits, uint32_t baud, bool invert
                     bool idleHigh, OutputMode outputMode, bool odPullup,
                     int dataGpio) {
   if (txActive) {
+    setIdleLine();
     return false;
   }
   if (bits.empty()) {
+    setIdleLine();
     return false;
   }
   beginTxTimer();
@@ -234,6 +230,7 @@ static bool startTx(const std::vector<uint8_t> &bits, uint32_t baud, bool invert
   txOutput = outputMode;
   txOdPullup = odPullup;
   txGpio = dataGpio;
+  setIdleLine();
   uint32_t periodUs = 1000000UL / baud;
   timerAlarmWrite(txTimer, periodUs, true);
   txActive = true;
@@ -323,38 +320,6 @@ static bool parseOutputMode(const String &value, OutputMode &out) {
   return false;
 }
 
-static void applyRfSenseConfig() {
-  if (config.rfSenseGpio < 0) {
-    return;
-  }
-  pinMode(config.rfSenseGpio, INPUT);
-}
-
-static void IRAM_ATTR onRfSense() {
-  uint32_t now = millis();
-  rfSenseCount++;
-  if (rfSenseLastMs > 0) {
-    rfSensePeriodTotal += (now - rfSenseLastMs);
-    rfSensePeriodCount++;
-  }
-  rfSenseLastMs = now;
-}
-
-static void attachRfSense() {
-  if (config.rfSenseGpio < 0) {
-    return;
-  }
-  detachInterrupt(config.rfSenseGpio);
-  pinMode(config.rfSenseGpio, INPUT);
-  attachInterrupt(config.rfSenseGpio, &onRfSense, RISING);
-}
-
-static void detachRfSenseIfNeeded(int oldGpio) {
-  if (oldGpio >= 0 && oldGpio != config.rfSenseGpio) {
-    detachInterrupt(oldGpio);
-  }
-}
-
 static void applyConfigPins() {
   txInvert = config.invert;
   txIdleHigh = config.idleHigh;
@@ -362,7 +327,6 @@ static void applyConfigPins() {
   txOdPullup = config.odPullup;
   txGpio = config.dataGpio;
   setIdleLine();
-  applyRfSenseConfig();
 }
 
 static bool applyPreset(const String &name, bool report) {
@@ -418,21 +382,20 @@ static void writeConfigFile() {
   file.printf("  \"capInd\": %u,\n", config.capInd);
   file.printf("  \"capGrp\": %u,\n", config.capGrp);
   file.printf("  \"functionBits\": %u,\n", config.functionBits);
-  file.printf("  \"dataGpio\": %d,\n", config.dataGpio);
-  file.printf("  \"rfSenseGpio\": %d\n", config.rfSenseGpio);
+  file.printf("  \"dataGpio\": %d\n", config.dataGpio);
   file.println("}");
   file.close();
 }
 
-static void loadConfig() {
+static bool loadConfig() {
   config = Config();
   if (!LittleFS.begin(true)) {
     Serial.println("ERR: LittleFS mount failed");
-    return;
+    return false;
   }
   if (!LittleFS.exists(kConfigPath)) {
     writeConfigFile();
-    return;
+    return true;
   }
   String json = readFileToString(kConfigPath);
   String value;
@@ -473,22 +436,25 @@ static void loadConfig() {
     config.functionBits = static_cast<uint8_t>(value.toInt() & 0x3);
   }
   if (extractJsonValue(json, "dataGpio", value)) {
-    config.dataGpio = value.toInt();
+    int dataGpio = value.toInt();
+    if (dataGpio > 0) {
+      config.dataGpio = dataGpio;
+    } else {
+      config.dataGpio = 4;
+    }
   }
-  if (extractJsonValue(json, "rfSenseGpio", value)) {
-    config.rfSenseGpio = value.toInt();
-  }
+  return false;
 }
 
 static void printStatus() {
   String outputMode = (config.output == OutputMode::kOpenDrain) ? "open_drain" : "push_pull";
   Serial.printf(
       "baud=%u invert=%s idleHigh=%s output=%s preambleMs=%u odPullup=%s bootPreset=%s "
-      "capInd=%u capGrp=%u functionBits=%u dataGpio=%d rfSenseGpio=%d\n",
+      "capInd=%u capGrp=%u functionBits=%u dataGpio=%d\n",
       config.baud, config.invert ? "true" : "false", config.idleHigh ? "true" : "false",
       outputMode.c_str(), config.preambleMs, config.odPullup ? "true" : "false",
       config.bootPreset.c_str(), config.capInd, config.capGrp, config.functionBits,
-      config.dataGpio, config.rfSenseGpio);
+      config.dataGpio);
 }
 
 static std::vector<uint8_t> buildAlternatingBits(uint32_t durationMs, uint32_t baud) {
@@ -540,20 +506,9 @@ static void runTestLoop(uint32_t seconds) {
   }
 }
 
-static void printRfSense() {
-  uint32_t count = rfSenseCount;
-  uint32_t lastMs = rfSenseLastMs;
-  uint64_t totalPeriod = rfSensePeriodTotal;
-  uint32_t periodCount = rfSensePeriodCount;
-  uint32_t lastSeenAgo = (lastMs == 0) ? 0 : (millis() - lastMs);
-  float avgPeriod = periodCount == 0 ? 0.0f : static_cast<float>(totalPeriod) / periodCount;
-  Serial.printf("count=%u lastSeenMsAgo=%u avgPeriodMs=%.2f\n", count, lastSeenAgo, avgPeriod);
-}
-
 static void applySetCommand(const String &key, const String &value) {
   String normalizedKey = key;
   normalizedKey.toLowerCase();
-  int oldRfSense = config.rfSenseGpio;
 
   if (normalizedKey == "baud") {
     uint32_t baud = static_cast<uint32_t>(value.toInt());
@@ -568,16 +523,6 @@ static void applySetCommand(const String &key, const String &value) {
     parseOutputMode(value, config.output);
   } else if (normalizedKey == "preamblems") {
     config.preambleMs = static_cast<uint32_t>(value.toInt());
-  } else if (normalizedKey == "odpullup") {
-    parseBool(value, config.odPullup);
-  } else if (normalizedKey == "bootpreset") {
-    String preset = value;
-    preset.toLowerCase();
-    if (!applyPreset(preset, false)) {
-      Serial.println("ERR: preset must be pager|bench|scope|invert");
-      return;
-    }
-    config.bootPreset = preset;
   } else if (normalizedKey == "capind") {
     config.capInd = static_cast<uint32_t>(value.toInt());
   } else if (normalizedKey == "capgrp") {
@@ -585,18 +530,43 @@ static void applySetCommand(const String &key, const String &value) {
   } else if (normalizedKey == "functionbits") {
     config.functionBits = static_cast<uint8_t>(value.toInt() & 0x3);
   } else if (normalizedKey == "datagpio") {
-    config.dataGpio = value.toInt();
-  } else if (normalizedKey == "rfsensegpio") {
-    config.rfSenseGpio = value.toInt();
+    int dataGpio = value.toInt();
+    if (dataGpio > 0) {
+      config.dataGpio = dataGpio;
+    } else {
+      config.dataGpio = 4;
+    }
   } else {
     Serial.println("ERR: unknown key");
     return;
   }
 
-  detachRfSenseIfNeeded(oldRfSense);
-  attachRfSense();
   applyConfigPins();
   Serial.println("OK");
+}
+
+static void printHelp() {
+  String outputMode = (config.output == OutputMode::kOpenDrain) ? "open_drain" : "push_pull";
+  Serial.println("POCSAG TX ready.");
+  Serial.printf("Data pin: GPIO%d (XIAO D3 == GPIO4). baud=%u invert=%s idleHigh=%s output=%s preambleMs=%u\n",
+                config.dataGpio, config.baud, config.invert ? "true" : "false",
+                config.idleHigh ? "true" : "false", outputMode.c_str(), config.preambleMs);
+  Serial.println("Commands:");
+  Serial.println("  STATUS                 - show current settings");
+  Serial.println("  SET <k> <v>            - change setting");
+  Serial.println("  SAVE / LOAD            - persist/restore config.json");
+  Serial.println("  H                      - send one test page \"H\" to capInd");
+  Serial.println("  T1 <sec>               - loop HELLO WORLD for <sec>");
+  Serial.println("  SCOPE <ms>             - output 1010 pattern for scope");
+  Serial.println("  HELP or ?              - show this menu");
+  Serial.println("Examples:");
+  Serial.println("  STATUS");
+  Serial.println("  SET baud 512");
+  Serial.println("  SET invert true");
+  Serial.println("  SCOPE 2000");
+  Serial.println("  T1 10");
+  Serial.println("  H");
+  Serial.println("  SAVE");
 }
 
 static void handleCommand(const String &line) {
@@ -621,16 +591,11 @@ static void handleCommand(const String &line) {
   if (cmd == "LOAD") {
     loadConfig();
     applyConfigPins();
-    attachRfSense();
     Serial.println("LOADED");
     return;
   }
   if (cmd == "H") {
     sendMessageOnce("H", config.capInd);
-    return;
-  }
-  if (cmd == "RFSENSE") {
-    printRfSense();
     return;
   }
   if (cmd == "SCOPE") {
@@ -647,6 +612,10 @@ static void handleCommand(const String &line) {
     String value = (space < 0) ? "" : trimmed.substring(space + 1);
     value.trim();
     applyPreset(value, true);
+    return;
+  }
+  if (cmd == "HELP" || cmd == "?") {
+    printHelp();
     return;
   }
   if (cmd == "SET") {
@@ -666,14 +635,15 @@ static void handleCommand(const String &line) {
 void setup() {
   Serial.begin(115200);
   delay(100);
-  loadConfig();
+  bool firstBoot = loadConfig();
   if (!applyPreset(config.bootPreset, false)) {
     applyConfigPins();
   }
-  attachRfSense();
   setIdleLine();
-  Serial.println(
-      "POCSAG ready. Commands: STATUS, SET, SAVE, LOAD, H, T1, SCOPE, RFSENSE, PRESET");
+  Serial.println("POCSAG TX ready. Type HELP or ? for commands.");
+  if (firstBoot) {
+    printHelp();
+  }
 }
 
 void loop() {

@@ -3,10 +3,20 @@
 This firmware outputs a deterministic POCSAG NRZ stream on an ESP32-S3 GPIO for scope validation
 and pager injection. The build keeps Arduino/PlatformIO and uses LittleFS for config storage.
 
-## Wiring
-- **GND → pager GND** (common ground required).
-- **GPIO (default 3/D2) → RF board DATA pin** with a **1k–2k series resistor**.
-- The DATA pin is **post-slicer, pre-ASIC** and expects open-collector style drive.
+## Quick Start
+### Wiring
+- **XIAO GND → pager GND** (common ground required; battery negative is fine).
+- **XIAO D3 (GPIO4) → pager data-in** through a **1k–2k2 series resistor**.
+
+### Serial usage (115200)
+- `STATUS`
+- `SCOPE 2000`
+- `T1 10`
+- `H`
+- `SAVE`
+
+## Wiring notes
+- The pager data-in pin is **post-slicer, pre-ASIC** and expects open-collector style drive.
 
 ### Drive modes
 - **open_drain (default)**
@@ -31,8 +41,7 @@ The device uses LittleFS with `/config.json`. On first boot, it creates the file
   "capInd": 1422890,
   "capGrp": 1422890,
   "functionBits": 0,
-  "dataGpio": 3,
-  "rfSenseGpio": -1
+  "dataGpio": 4
 }
 ```
 
@@ -47,34 +56,37 @@ The device uses LittleFS with `/config.json`. On first boot, it creates the file
 - `capInd` / `capGrp`: capcodes (no auto +1).
 - `functionBits`: 0–3.
 - `dataGpio`: output pin.
-- `rfSenseGpio`: optional input; set `-1` to disable.
+
+## Default settings
+- `baud`: 512
+- `invert`: false
+- `idleHigh`: true
+- `output`: open_drain
+- `preambleMs`: 2000
+- `capInd`: 1422890
+- `capGrp`: 1422890
+- `functionBits`: 0
+- `dataGpio`: GPIO4 (XIAO D3)
 
 ## Commands (Serial @ 115200)
-All commands are plain text.
-
-- `STATUS`
-  - Print current config in one line.
-- `SET <key> <value>`
-  - Update RAM config only. Keys match the JSON fields.
-- `PRESET <name>`
-  - Apply preset immediately. Names: `pager`, `bench`, `scope`, `invert`.
-- `SAVE`
-  - Write `/config.json`.
-- `LOAD`
-  - Reload `/config.json`.
-- `H`
-  - One-shot page with message `H` using current settings.
-- `T1 <seconds>`
-  - Deterministic test loop: repeatedly sends `HELLO WORLD` every 250 ms for `<seconds>`.
-- `SCOPE <ms>`
-  - Outputs alternating `1010...` for `<ms>` using current baud/output/invert/idle.
-- `RFSENSE`
-  - Prints: `count`, `lastSeenMsAgo`, `avgPeriodMs` (if `rfSenseGpio >= 0`).
-
+POCSAG TX ready.
+Data pin: GPIO4 (XIAO D3). baud=512 invert=false idleHigh=true output=open_drain preambleMs=2000
+Commands:
+  STATUS                 - show current settings
+  SET <k> <v>            - change setting
+  SAVE / LOAD            - persist/restore config.json
+  H                      - send one test page "H" to capInd
+  T1 <sec>               - loop HELLO WORLD for <sec>
+  SCOPE <ms>             - output 1010 pattern for scope
+  HELP or ?              - show this menu
 Examples:
-- `PRESET scope; SCOPE 2000`
-- `PRESET bench; H`
-- `SET bootPreset bench; SAVE`
+  STATUS
+  SET baud 512
+  SET invert true
+  SCOPE 2000
+  T1 10
+  H
+  SAVE
 
 ## Build & flash (PlatformIO)
 ```bash
