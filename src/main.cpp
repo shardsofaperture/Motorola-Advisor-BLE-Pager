@@ -74,6 +74,13 @@ enum class InjectionProfile : uint8_t {
 
 extern OutputMode configuredOutputMode;
 extern bool configuredIdleHigh;
+extern uint32_t configuredBaud;
+extern bool configuredInvert;
+extern uint32_t configuredDefaultPreambleMs;
+extern bool pendingDebugScope;
+extern uint32_t debugScopeRestoreBaud;
+extern int configuredRfSenseGpio;
+extern volatile uint32_t rfSensePulseCount;
 
 bool send_min_page(InjectionProfile profile, uint32_t capcode, uint8_t functionBits,
                    uint32_t baud, bool invert, bool idleHigh, uint32_t preambleBits);
@@ -83,6 +90,9 @@ bool send_min_page_with_settings(uint32_t capcode, uint8_t functionBits, uint32_
                                  OutputMode outputMode);
 
 std::vector<int> parseGpioList(const String &value);
+void updateRfSensePulseWidth();
+String buildStatusLine();
+std::vector<uint8_t> buildAlternatingBitsForBaud(uint32_t durationMs, uint32_t baud);
 
 class PageStore {
  public:
