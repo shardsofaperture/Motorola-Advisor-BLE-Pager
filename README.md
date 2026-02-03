@@ -26,6 +26,8 @@ The device uses LittleFS with `/config.json`. On first boot, it creates the file
   "idleHigh": true,
   "output": "open_drain",
   "preambleMs": 2000,
+  "odPullup": false,
+  "bootPreset": "pager",
   "capInd": 1422890,
   "capGrp": 1422890,
   "functionBits": 0,
@@ -40,6 +42,8 @@ The device uses LittleFS with `/config.json`. On first boot, it creates the file
 - `idleHigh`: logical idle state.
 - `output`: `open_drain` or `push_pull`.
 - `preambleMs`: preamble duration (1010...)
+- `odPullup`: when `output` is `open_drain`, drive idle/high as `INPUT_PULLUP` if true.
+- `bootPreset`: preset name to apply at boot (`pager`, `bench`, `scope`, `invert`).
 - `capInd` / `capGrp`: capcodes (no auto +1).
 - `functionBits`: 0–3.
 - `dataGpio`: output pin.
@@ -52,6 +56,8 @@ All commands are plain text.
   - Print current config in one line.
 - `SET <key> <value>`
   - Update RAM config only. Keys match the JSON fields.
+- `PRESET <name>`
+  - Apply preset immediately. Names: `pager`, `bench`, `scope`, `invert`.
 - `SAVE`
   - Write `/config.json`.
 - `LOAD`
@@ -64,6 +70,11 @@ All commands are plain text.
   - Outputs alternating `1010...` for `<ms>` using current baud/output/invert/idle.
 - `RFSENSE`
   - Prints: `count`, `lastSeenMsAgo`, `avgPeriodMs` (if `rfSenseGpio >= 0`).
+
+Examples:
+- `PRESET scope; SCOPE 2000`
+- `PRESET bench; H`
+- `SET bootPreset bench; SAVE`
 
 ## Build & flash (PlatformIO)
 ```bash
