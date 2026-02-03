@@ -1,271 +1,69 @@
 #include <Arduino.h>
-#include <NimBLEDevice.h>
-#include <Preferences.h>
+#include <LittleFS.h>
 
-#include <algorithm>
-#include <cctype>
-#include <cstdlib>
-#include <deque>
-#include <functional>
 #include <vector>
 
 namespace {
-constexpr const char *kDeviceName = "PagerBridge";
-
-// Compile-time configuration.
-constexpr int kDataGpio = 3; // D2 on XIAO ESP32-S3status
-constexpr int kAlertGpio = -1;
-constexpr int kRfSenseGpio = -1;
-constexpr uint32_t kDefaultCapcodeInd = 123456;
-constexpr uint32_t kDefaultCapcodeGrp = 123457;
-constexpr uint32_t kDefaultBaud = 512;
-constexpr bool kDefaultInvert = false;
-constexpr bool kDefaultIdleLineHigh = true;
-constexpr uint8_t kDefaultFunctionBits = 0;
-constexpr uint32_t kPocsagBatchWordCount = 17;
-constexpr size_t kPageStoreCapacity = 20;
-constexpr size_t kPersistPageCount = 3;
-constexpr uint32_t kPreambleBits = 576;
-constexpr uint32_t kDefaultPreambleMs = (kPreambleBits * 1000) / kDefaultBaud;
-constexpr uint32_t kAlertWindowMs = 2000;
-constexpr uint32_t kProbeGapMs = 500;
-
+constexpr const char *kConfigPath = "/config.json";
 constexpr uint32_t kSyncWord = 0x7CD215D8;
 constexpr uint32_t kIdleWord = 0x7A89C197;
-
-static NimBLEServer *bleServer = nullptr;
-static NimBLECharacteristic *rxCharacteristic = nullptr;
-static NimBLECharacteristic *statusCharacteristic = nullptr;
-
-static const NimBLEUUID kServiceUUID("1b0ee9b4-e833-5a9e-354c-7e2d486b2b7f");
-static const NimBLEUUID kRxUUID("1b0ee9b4-e833-5a9e-354c-7e2d496b2b7f");
-static const NimBLEUUID kStatusUUID("1b0ee9b4-e833-5a9e-354c-7e2d4a6b2b7f");
-
-static Preferences preferences;
-
-static std::deque<String> statusQueue;
-
-struct PageRecord {
-  uint32_t capcode = 0;
-  String message;
-  uint32_t timestampMs = 0;
-  String lastResult;
-
-  PageRecord() = default;
-  PageRecord(uint32_t capcodeIn, const String &messageIn, uint32_t timestampMsIn,
-             const String &resultIn)
-      : capcode(capcodeIn),
-        message(messageIn),
-        timestampMs(timestampMsIn),
-        lastResult(resultIn) {}
-};
+constexpr uint32_t kDefaultIntervalMs = 250;
+}
 
 enum class OutputMode : uint8_t { kOpenDrain = 0, kPushPull = 1 };
 
-constexpr OutputMode kDefaultOutputMode = OutputMode::kOpenDrain;
-
-enum class InjectionProfile : uint8_t {
-  kNrzSliced = 0,
-  kNrzPushPull = 1,
-  kManchester = 2,
-  kDiscrimAudioFsk = 3,
-  kSlicerEdgePulse = 4,
+struct Config {
+  uint32_t baud = 512;
+  bool invert = false;
+  bool idleHigh = true;
+  OutputMode output = OutputMode::kOpenDrain;
+  uint32_t preambleMs = 2000;
+  uint32_t capInd = 1422890;
+  uint32_t capGrp = 1422890;
+  uint8_t functionBits = 0;
+  int dataGpio = 3;
+  int rfSenseGpio = -1;
 };
 
-extern OutputMode configuredOutputMode;
-extern bool configuredIdleHigh;
-extern uint32_t configuredBaud;
-extern bool configuredInvert;
-extern uint32_t configuredDefaultPreambleMs;
-extern bool pendingDebugScope;
-extern uint32_t debugScopeRestoreBaud;
-extern int configuredRfSenseGpio;
-extern volatile uint32_t rfSensePulseCount;
+static Config config;
 
-bool send_min_page(InjectionProfile profile, uint32_t capcode, uint8_t functionBits,
-                   uint32_t baud, bool invert, bool idleHigh, uint32_t preambleBits);
-bool send_min_page(uint32_t capcode, uint8_t functionBits, uint32_t preambleMs);
-bool send_min_page_with_settings(uint32_t capcode, uint8_t functionBits, uint32_t preambleMs,
-                                 uint32_t baud, bool invert, bool idleHigh,
-                                 OutputMode outputMode);
+static hw_timer_t *txTimer = nullptr;
+static portMUX_TYPE txMux = portMUX_INITIALIZER_UNLOCKED;
+static volatile bool txActive = false;
+static volatile size_t txIndex = 0;
+static const uint8_t *txData = nullptr;
+static size_t txSize = 0;
+static bool txInvert = false;
+static bool txIdleHigh = true;
+static OutputMode txOutput = OutputMode::kOpenDrain;
+static int txGpio = 3;
 
-std::vector<int> parseGpioList(const String &value);
-void updateRfSensePulseWidth();
-String buildStatusLine();
-std::vector<uint8_t> buildAlternatingBitsForBaud(uint32_t durationMs, uint32_t baud);
-
-class PageStore {
- public:
-  explicit PageStore(size_t capacity) : capacity_(capacity) {}
-
-  void load(Preferences &prefs) {
-    pages_.clear();
-    const size_t stored = prefs.getUInt("pageCount", 0);
-    for (size_t i = 0; i < stored && i < capacity_; ++i) {
-      String key = String("page") + i;
-      String value = prefs.getString(key.c_str(), "");
-      if (value.length() == 0) {
-        continue;
-      }
-      PageRecord record;
-      if (deserialize(value, record)) {
-        pages_.push_back(record);
-      }
-    }
-  }
-
-  void persist(Preferences &prefs) const {
-    size_t stored = std::min(pages_.size(), static_cast<size_t>(kPersistPageCount));
-    prefs.putUInt("pageCount", stored);
-    for (size_t i = 0; i < stored; ++i) {
-      size_t index = pages_.size() - stored + i;
-      const PageRecord &record = pages_[index];
-      String key = String("page") + i;
-      prefs.putString(key.c_str(), serialize(record));
-    }
-  }
-
-  void add(uint32_t capcode, const String &message, uint32_t timestampMs,
-           const String &result) {
-    if (pages_.size() == capacity_) {
-      pages_.pop_front();
-    }
-    pages_.push_back(PageRecord{capcode, message, timestampMs, result});
-  }
-
-  void updateLatestResult(const String &result) {
-    if (pages_.empty()) {
-      return;
-    }
-    pages_.back().lastResult = result;
-  }
-
-  void clear() { pages_.clear(); }
-
-  size_t size() const { return pages_.size(); }
-
-  bool getByIndex(size_t indexFromNewest, PageRecord &out) const {
-    if (indexFromNewest >= pages_.size()) {
-      return false;
-    }
-    size_t index = pages_.size() - 1 - indexFromNewest;
-    out = pages_[index];
-    return true;
-  }
-
-  std::vector<String> listSummary() const {
-    std::vector<String> lines;
-    lines.reserve(pages_.size());
-    size_t idx = 0;
-    for (auto it = pages_.rbegin(); it != pages_.rend(); ++it, ++idx) {
-      String line = String("#") + idx + " cap=" + it->capcode + " result=" + it->lastResult +
-                    " ms=" + it->timestampMs + " msg=\"" + it->message + "\"";
-      lines.push_back(line);
-    }
-    return lines;
-  }
-
- private:
-  String serialize(const PageRecord &record) const {
-    String value = String(record.capcode) + "|" + record.timestampMs + "|" + record.lastResult +
-                   "|" + record.message;
-    return value;
-  }
-
-  bool deserialize(const String &value, PageRecord &record) const {
-    int first = value.indexOf('|');
-    int second = value.indexOf('|', first + 1);
-    int third = value.indexOf('|', second + 1);
-    if (first < 0 || second < 0) {
-      return false;
-    }
-    record.capcode = value.substring(0, first).toInt();
-    record.timestampMs = value.substring(first + 1, second).toInt();
-    if (third < 0) {
-      record.lastResult = "UNKNOWN";
-      record.message = value.substring(second + 1);
-    } else {
-      record.lastResult = value.substring(second + 1, third);
-      record.message = value.substring(third + 1);
-    }
-    return true;
-  }
-
-  size_t capacity_ = 0;
-  std::deque<PageRecord> pages_;
-};
+static volatile uint32_t rfSenseCount = 0;
+static volatile uint32_t rfSenseLastMs = 0;
+static volatile uint64_t rfSensePeriodTotal = 0;
+static volatile uint32_t rfSensePeriodCount = 0;
 
 class PocsagEncoder {
  public:
-  std::vector<uint8_t> buildBitstream(uint32_t capcode, const String &message) const {
+  std::vector<uint8_t> buildBitstream(uint32_t capcode, uint8_t functionBits,
+                                      const String &message, uint32_t preambleMs,
+                                      uint32_t baud) const {
     std::vector<uint8_t> bits;
-    bits.reserve(kPreambleBits + 2048);
-
-    appendPreamble(bits);
-
-    std::vector<uint32_t> codewords = buildCodewords(capcode, message, 0);
-    for (uint32_t word : codewords) {
-      appendWord(bits, word);
-    }
-
-    appendWord(bits, kIdleWord);
-    appendWord(bits, kIdleWord);
-    return bits;
-  }
-
-  std::vector<uint8_t> buildBitstreamFromCodewords(const std::vector<uint32_t> &codewords,
-                                                   bool includePreamble) const {
-    std::vector<uint8_t> bits;
-    bits.reserve(kPreambleBits + codewords.size() * 32);
-    if (includePreamble) {
-      appendPreamble(bits);
-    }
-    for (uint32_t word : codewords) {
+    appendPreamble(bits, preambleMs, baud);
+    appendWord(bits, kSyncWord);
+    std::vector<uint32_t> batch = buildSingleBatch(capcode, functionBits, message);
+    for (uint32_t word : batch) {
       appendWord(bits, word);
     }
     return bits;
-  }
-
-  std::vector<uint8_t> buildSingleBatch(uint32_t capcode, uint8_t functionBits,
-                                        const String &message) const {
-    std::vector<uint32_t> batch = buildSingleBatchCodewords(capcode, functionBits, &message);
-    return buildBitstreamFromCodewords(batch, true);
-  }
-
-  std::vector<uint8_t> buildSingleBatchAddressOnly(uint32_t capcode, uint8_t functionBits) const {
-    std::vector<uint32_t> batch = buildSingleBatchCodewords(capcode, functionBits, nullptr);
-    return buildBitstreamFromCodewords(batch, true);
-  }
-
-  std::vector<uint32_t> buildSingleBatchCodewords(uint32_t capcode, uint8_t functionBits,
-                                                  const String *message) const {
-    std::vector<uint32_t> words;
-    words.reserve(kPocsagBatchWordCount);
-    words.push_back(kSyncWord);
-    uint32_t ric = capcode / 2;
-    uint8_t frame = ric % 8;
-    uint32_t addressWord = buildAddressWord(capcode, functionBits);
-    uint32_t messageWord = message ? buildMessageWordFromText(*message) : kIdleWord;
-    for (uint8_t frameIndex = 0; frameIndex < 8; ++frameIndex) {
-      if (frameIndex == frame) {
-        words.push_back(addressWord);
-        words.push_back(messageWord);
-      } else {
-        words.push_back(kIdleWord);
-        words.push_back(kIdleWord);
-      }
-    }
-    return words;
-  }
-
-  uint32_t buildAddressCodeword(uint32_t capcode, uint8_t functionBits) const {
-    return buildAddressWord(capcode, functionBits);
   }
 
  private:
-  void appendPreamble(std::vector<uint8_t> &bits) const {
-    bits.reserve(bits.size() + kPreambleBits);
-    for (uint32_t i = 0; i < kPreambleBits; ++i) {
+  void appendPreamble(std::vector<uint8_t> &bits, uint32_t preambleMs,
+                      uint32_t baud) const {
+    uint32_t preambleBits = (preambleMs * baud) / 1000;
+    bits.reserve(bits.size() + preambleBits + 32 * 17);
+    for (uint32_t i = 0; i < preambleBits; ++i) {
       bits.push_back(static_cast<uint8_t>(i % 2 == 0));
     }
   }
@@ -276,110 +74,24 @@ class PocsagEncoder {
     }
   }
 
-  std::vector<uint32_t> buildCodewords(uint32_t capcode, const String &message,
-                                       uint8_t functionBits) const {
-    std::vector<uint32_t> codewords;
-    std::vector<uint32_t> messageWords = buildMessageWords(message);
+  std::vector<uint32_t> buildSingleBatch(uint32_t capcode, uint8_t functionBits,
+                                         const String &message) const {
+    std::vector<uint32_t> words(16, kIdleWord);
+    uint8_t frame = static_cast<uint8_t>(capcode & 0x7);
     uint32_t addressWord = buildAddressWord(capcode, functionBits);
+    std::vector<uint32_t> messageWords = buildAlphaWords(message);
 
-    size_t messageIndex = 0;
-    uint32_t ric = capcode / 2;
-    uint8_t frame = ric % 8;
-    bool addressInserted = false;
-
-    bool done = false;
-    while (!done) {
-      codewords.push_back(kSyncWord);
-      for (uint8_t frameIndex = 0; frameIndex < 8; ++frameIndex) {
-        for (int slot = 0; slot < 2; ++slot) {
-          if (!addressInserted && frameIndex == frame && slot == 0) {
-            codewords.push_back(addressWord);
-            addressInserted = true;
-            continue;
-          }
-          if (!addressInserted && frameIndex < frame) {
-            codewords.push_back(kIdleWord);
-            continue;
-          }
-          if (messageIndex < messageWords.size()) {
-            codewords.push_back(messageWords[messageIndex++]);
-            continue;
-          }
-          codewords.push_back(kIdleWord);
-        }
-      }
-      if (messageIndex >= messageWords.size()) {
-        done = true;
-      }
-      if (!done) {
-        frame = 0;
-      }
+    size_t index = frame * 2;
+    if (index < words.size()) {
+      words[index++] = addressWord;
     }
-    if (codewords.size() == 1) {
-      codewords.push_back(kIdleWord);
-      codewords.push_back(kIdleWord);
-    }
-    return codewords;
-  }
-
-  std::vector<uint32_t> buildMessageWords(const String &message) const {
-    return buildAlphaWords(message);
-  }
-
-  bool isNumericMessage(const String &message) const {
-    for (size_t i = 0; i < message.length(); ++i) {
-      char c = message[i];
-      if (isdigit(static_cast<unsigned char>(c))) {
-        continue;
+    for (uint32_t word : messageWords) {
+      if (index >= words.size()) {
+        break;
       }
-      if (c == ' ' || c == '-' || c == '(' || c == ')') {
-        continue;
-      }
-      return false;
-    }
-    return true;
-  }
-
-  std::vector<uint32_t> buildNumericWords(const String &message) const {
-    std::vector<uint8_t> nibbles;
-    nibbles.reserve(message.length());
-    for (size_t i = 0; i < message.length(); ++i) {
-      nibbles.push_back(numericNibble(message[i]));
-    }
-    std::vector<uint32_t> words;
-    size_t index = 0;
-    while (index < nibbles.size()) {
-      uint32_t data = 0;
-      for (int i = 0; i < 5; ++i) {
-        data <<= 4;
-        if (index < nibbles.size()) {
-          data |= (nibbles[index++] & 0xF);
-        }
-      }
-      words.push_back(buildMessageWord(data));
-    }
-    if (words.empty()) {
-      words.push_back(buildMessageWord(0));
+      words[index++] = word;
     }
     return words;
-  }
-
-  uint8_t numericNibble(char c) const {
-    if (c >= '0' && c <= '9') {
-      return static_cast<uint8_t>(c - '0');
-    }
-    switch (c) {
-      case ' ':
-        return 0xA;
-      case '-':
-        return 0xB;
-      case '(':
-        return 0xC;
-      case ')':
-        return 0xD;
-      default:
-        return 0xA;
-    }
   }
 
   std::vector<uint32_t> buildAlphaWords(const String &message) const {
@@ -387,10 +99,6 @@ class PocsagEncoder {
     bits.reserve(message.length() * 7);
     for (size_t i = 0; i < message.length(); ++i) {
       uint8_t value = static_cast<uint8_t>(message[i]) & 0x7F;
-      // POCSAG alphanumeric: append 7-bit ASCII LSB-first (bit 0 -> bit 6).
-      // Example: "A" (0x41, b1000001) yields bit stream: 1 0 0 0 0 0 1,
-      // which packs into the first payload as 0b1000001 followed by padding
-      // zeros => data20 = 0x82000 (bits 19..13 set as 1 0 0 0 0 0 1).
       for (int b = 0; b <= 6; ++b) {
         bits.push_back(static_cast<uint8_t>((value >> b) & 0x1));
       }
@@ -400,7 +108,6 @@ class PocsagEncoder {
     while (index < bits.size()) {
       uint32_t data = 0;
       for (int i = 0; i < 20; ++i) {
-        // Pack bits in transmission order: first bit becomes MSB of payload.
         data <<= 1;
         if (index < bits.size()) {
           data |= bits[index++];
@@ -415,24 +122,14 @@ class PocsagEncoder {
   }
 
   uint32_t buildAddressWord(uint32_t capcode, uint8_t functionBits) const {
-    uint32_t ric = capcode / 2;
-    uint32_t address = ric / 8;
+    uint32_t address = capcode >> 3;
     uint32_t data = (address & 0x3FFFF) << 2;
     data |= (functionBits & 0x3);
-    uint32_t cw = buildCodeword(0, data);
-    return cw;
+    return buildCodeword(0, data);
   }
 
   uint32_t buildMessageWord(uint32_t data20) const {
     return buildCodeword(1, data20 & 0xFFFFF);
-  }
-
-  uint32_t buildMessageWordFromText(const String &message) const {
-    std::vector<uint32_t> words = buildAlphaWords(message);
-    if (!words.empty()) {
-      return words.front();
-    }
-    return buildMessageWord(0);
   }
 
   uint32_t buildCodeword(uint8_t typeBit, uint32_t data) const {
@@ -456,2685 +153,470 @@ class PocsagEncoder {
 
   uint32_t computeParity(uint32_t value) const {
     uint32_t parity = 0;
-    uint32_t temp = value;
-    while (temp) {
-      parity ^= (temp & 1u);
-      temp >>= 1;
+    while (value) {
+      parity ^= (value & 1u);
+      value >>= 1;
     }
     return parity & 0x1;
   }
 };
 
-class PocsagTx {
- public:
-  PocsagTx() = default;
-
-  void begin(int dataPin, bool invert, uint32_t baud, OutputMode outputMode, bool idleHigh) {
-    if (timer_ != nullptr) {
-      timerAlarmDisable(timer_);
-      timerDetachInterrupt(timer_);
-      timerEnd(timer_);
-      timer_ = nullptr;
-    }
-    instance_ = this;
-    dataPin_ = dataPin;
-    invert_ = invert;
-    outputMode_ = outputMode;
-    idleHigh_ = idleHigh;
-    pinMode(dataPin_, INPUT);
-    timer_ = timerBegin(0, 80, true);
-    timerAttachInterrupt(timer_, &PocsagTx::onTimer, true);
-    setBaud(baud);
-    idleLine();
-  }
-
-  void setBaud(uint32_t baud) {
-    baud_ = baud;
-    if (timer_ != nullptr) {
-      timerAlarmDisable(timer_);
-      // 512 bps bit period: 1.953125 ms (1953.125 us).
-      uint32_t periodUs = (1000000 + (baud_ / 2)) / baud_;
-      timerAlarmWrite(timer_, periodUs, true);
-    }
-  }
-
-  void setInvert(bool invert) {
-    invert_ = invert;
-    idleLine();
-  }
-
-  void setOutputMode(OutputMode outputMode) {
-    outputMode_ = outputMode;
-    idleLine();
-  }
-
-  void setIdleHigh(bool idleHigh) {
-    idleHigh_ = idleHigh;
-    idleLine();
-  }
-
-  void idle() { idleLine(); }
-
-  bool isBusy() const { return sending_; }
-
-  bool sendBits(std::vector<uint8_t> &&bits) {
-    if (sending_ || bits.empty()) {
-      return false;
-    }
-    bits_ = std::move(bits);
-    bitIndex_ = 0;
-    sending_ = true;
-    timerAlarmWrite(timer_, bitPeriodUs(), true);
-    timerAlarmEnable(timer_);
-    return true;
-  }
-
-  bool consumeDoneFlag() {
-    if (doneFlag_) {
-      doneFlag_ = false;
-      return true;
-    }
-    return false;
-  }
-
- private:
-  static void IRAM_ATTR onTimer() {
-    instance_->handleTimer();
-  }
-
-  void IRAM_ATTR handleTimer() {
-    if (!sending_) {
-      return;
-    }
-    if (bitIndex_ >= bits_.size()) {
-      timerAlarmDisable(timer_);
-      sending_ = false;
-      doneFlag_ = true;
-      idleLine();
-      return;
-    }
-    uint8_t bit = bits_[bitIndex_++];
-    driveBit(bit);
-  }
-
-  void driveBit(uint8_t bit) {
-    bool level = bit != 0;
-    if (invert_) {
-      level = !level;
-    }
-    applyLineLevel(level);
-  }
-
-  void idleLine() {
-    bool idleLevel = idleHigh_;
-    if (invert_) {
-      idleLevel = !idleLevel;
-    }
-    applyLineLevel(idleLevel);
-  }
-
-  void applyLineLevel(bool level) {
-    if (outputMode_ == OutputMode::kOpenDrain) {
-      if (level) {
-        pinMode(dataPin_, INPUT);
-        return;
-      }
-      pinMode(dataPin_, OUTPUT);
-      digitalWrite(dataPin_, LOW);
-      return;
-    }
-    pinMode(dataPin_, OUTPUT);
-    digitalWrite(dataPin_, level ? HIGH : LOW);
-  }
-
-  uint32_t bitPeriodUs() const { return (1000000 + (baud_ / 2)) / baud_; }
-
-  static PocsagTx *instance_;
-  int dataPin_ = -1;
-  bool invert_ = false;
-  OutputMode outputMode_ = OutputMode::kPushPull;
-  bool idleHigh_ = true;
-  uint32_t baud_ = 1200;
-  hw_timer_t *timer_ = nullptr;
-  volatile bool sending_ = false;
-  volatile bool doneFlag_ = false;
-  volatile size_t bitIndex_ = 0;
-  std::vector<uint8_t> bits_;
-};
-
-PocsagTx *PocsagTx::instance_ = nullptr;
-
-struct EncodedWaveform {
-  std::vector<uint8_t> bits;
-  uint32_t baud = 1200;
-};
-
-String injectionProfileName(InjectionProfile profile) {
-  switch (profile) {
-    case InjectionProfile::kNrzSliced:
-      return "NRZ_SLICED";
-    case InjectionProfile::kNrzPushPull:
-      return "NRZ_PUSH_PULL";
-    case InjectionProfile::kManchester:
-      return "MANCHESTER";
-    case InjectionProfile::kDiscrimAudioFsk:
-      return "DISCRIM_AUDIO_FSK";
-    case InjectionProfile::kSlicerEdgePulse:
-      return "SLICER_EDGE_PULSE";
-  }
-  return "UNKNOWN";
-}
-
-void appendWordBits(std::vector<uint8_t> &bits, uint32_t word) {
-  for (int i = 31; i >= 0; --i) {
-    bits.push_back(static_cast<uint8_t>((word >> i) & 0x1));
-  }
-}
-
-std::vector<uint8_t> buildMinimalNrzBits(const PocsagEncoder &encoder, uint32_t capcode,
-                                         uint8_t functionBits, uint32_t preambleBits) {
-  std::vector<uint8_t> bits;
-  bits.reserve(preambleBits + (1 + 16) * 32);
-  for (uint32_t i = 0; i < preambleBits; ++i) {
-    bits.push_back(static_cast<uint8_t>((i % 2) == 0));
-  }
-  std::vector<uint32_t> batch = encoder.buildSingleBatchCodewords(capcode, functionBits, nullptr);
-  for (uint32_t word : batch) {
-    appendWordBits(bits, word);
-  }
-  return bits;
-}
-
-uint32_t preambleBitsFromMs(uint32_t baud, uint32_t preambleMs) {
-  uint64_t bits =
-      (static_cast<uint64_t>(baud) * static_cast<uint64_t>(preambleMs) + 999) / 1000;
-  return std::max<uint32_t>(1, static_cast<uint32_t>(bits));
-}
-
-EncodedWaveform encodeManchester(const std::vector<uint8_t> &nrzBits, uint32_t baud) {
-  EncodedWaveform waveform;
-  waveform.bits.reserve(nrzBits.size() * 2);
-  for (uint8_t bit : nrzBits) {
-    if (bit) {
-      waveform.bits.push_back(1);
-      waveform.bits.push_back(0);
-    } else {
-      waveform.bits.push_back(0);
-      waveform.bits.push_back(1);
-    }
-  }
-  waveform.baud = baud * 2;
-  return waveform;
-}
-
-EncodedWaveform encodeDiscrimAudioFsk(const std::vector<uint8_t> &nrzBits, uint32_t baud) {
-  constexpr uint32_t kFskTickUs = 50;
-  EncodedWaveform waveform;
-  uint32_t bitPeriodUs = (1000000 + (baud / 2)) / baud;
-  uint32_t ticksPerBit = std::max<uint32_t>(1, (bitPeriodUs + (kFskTickUs / 2)) / kFskTickUs);
-  waveform.bits.reserve(nrzBits.size() * ticksPerBit);
-  for (uint8_t bit : nrzBits) {
-    uint32_t freq = bit ? 1200 : 2200;
-    uint32_t halfPeriodUs = (1000000 + (freq)) / (freq * 2);
-    uint32_t ticksPerHalf =
-        std::max<uint32_t>(1, (halfPeriodUs + (kFskTickUs / 2)) / kFskTickUs);
-    bool level = true;
-    uint32_t tickCount = 0;
-    for (uint32_t tick = 0; tick < ticksPerBit; ++tick) {
-      waveform.bits.push_back(level ? 1 : 0);
-      ++tickCount;
-      if (tickCount >= ticksPerHalf) {
-        tickCount = 0;
-        level = !level;
-      }
-    }
-  }
-  waveform.baud = 1000000 / kFskTickUs;
-  return waveform;
-}
-
-EncodedWaveform encodeSlicerEdgePulse(const std::vector<uint8_t> &nrzBits, uint32_t baud,
-                                      bool idleHigh) {
-  constexpr uint32_t kPulseUs = 100;
-  constexpr uint32_t kPulseTickUs = 50;
-  EncodedWaveform waveform;
-  uint32_t bitPeriodUs = (1000000 + (baud / 2)) / baud;
-  uint32_t ticksPerBit =
-      std::max<uint32_t>(1, (bitPeriodUs + (kPulseTickUs / 2)) / kPulseTickUs);
-  uint32_t pulseTicks =
-      std::min<uint32_t>(ticksPerBit,
-                         std::max<uint32_t>(1, (kPulseUs + (kPulseTickUs / 2)) / kPulseTickUs));
-  waveform.bits.reserve(nrzBits.size() * ticksPerBit);
-  uint8_t baseline = idleHigh ? 1 : 0;
-  uint8_t pulseLevel = baseline ? 0 : 1;
-  uint8_t previous = nrzBits.empty() ? 0 : nrzBits.front();
-  for (uint8_t bit : nrzBits) {
-    bool transition = bit != previous;
-    if (transition) {
-      for (uint32_t i = 0; i < pulseTicks; ++i) {
-        waveform.bits.push_back(pulseLevel);
-      }
-      for (uint32_t i = pulseTicks; i < ticksPerBit; ++i) {
-        waveform.bits.push_back(baseline);
-      }
-    } else {
-      for (uint32_t i = 0; i < ticksPerBit; ++i) {
-        waveform.bits.push_back(baseline);
-      }
-    }
-    previous = bit;
-  }
-  waveform.baud = 1000000 / kPulseTickUs;
-  return waveform;
-}
-
-struct TxRequest {
-  uint32_t capcode = 0;
-  String message;
-  bool store = true;
-  bool isRaw = false;
-  std::vector<uint8_t> rawBits;
-  String label;
-
-  TxRequest() = default;
-  TxRequest(uint32_t capcodeIn, const String &messageIn, bool storeIn)
-      : capcode(capcodeIn), message(messageIn), store(storeIn) {}
-  TxRequest(std::vector<uint8_t> &&bitsIn, const String &labelIn)
-      : isRaw(true), rawBits(std::move(bitsIn)), label(labelIn) {}
-};
-
-enum class ProbeMode { kNone, kSequential, kBinary, kOneshot };
-
-class ProbeController {
- public:
-  ProbeController(PocsagTx &tx, const PocsagEncoder &encoder)
-      : tx_(tx), encoder_(encoder) {}
-
-  void begin(int alertPin) {
-    alertPin_ = alertPin;
-    if (alertPin_ >= 0) {
-      pinMode(alertPin_, INPUT);
-    }
-  }
-
-  bool startSequential(uint32_t startCap, uint32_t endCap, uint32_t step) {
-    if (alertPin_ < 0) {
-      return false;
-    }
-    mode_ = ProbeMode::kSequential;
-    startCap_ = startCap;
-    endCap_ = endCap;
-    step_ = std::max<uint32_t>(step, 1);
-    currentCap_ = startCap_;
-    sequence_.clear();
-    preparing_ = true;
-    waitingForAlert_ = false;
-    alertHigh_ = false;
-    nextAllowedMs_ = 0;
-    return true;
-  }
-
-  bool startBinary(uint32_t startCap, uint32_t endCap) {
-    if (alertPin_ < 0) {
-      return false;
-    }
-    mode_ = ProbeMode::kBinary;
-    startCap_ = startCap;
-    endCap_ = endCap;
-    buildBinarySequence();
-    currentIndex_ = 0;
-    preparing_ = true;
-    waitingForAlert_ = false;
-    alertHigh_ = false;
-    nextAllowedMs_ = 0;
-    return true;
-  }
-
-  void stop() {
-    mode_ = ProbeMode::kNone;
-    preparing_ = false;
-    waitingForAlert_ = false;
-    sequence_.clear();
-  }
-
-  void startOneshot(const std::vector<uint32_t> &caps) {
-    mode_ = ProbeMode::kOneshot;
-    sequence_ = caps;
-    currentIndex_ = 0;
-    preparing_ = true;
-    waitingForAlert_ = false;
-    alertHigh_ = false;
-    nextAllowedMs_ = 0;
-  }
-
-  // Probe sends test pages and watches ALERT_GPIO for pager activity.
-  void update(std::function<void(uint32_t)> onHit, std::function<void(uint32_t)> onSend) {
-    if (mode_ == ProbeMode::kNone) {
-      return;
-    }
-    if (!waitingForAlert_ && preparing_ && !tx_.isBusy()) {
-      if (!readyForNext()) {
-        return;
-      }
-      uint32_t cap = nextCap();
-      if (cap == 0xFFFFFFFF) {
-        stop();
-        return;
-      }
-      activeCap_ = cap;
-      auto bits = encoder_.buildBitstream(cap, "PROBE");
-      if (tx_.sendBits(std::move(bits))) {
-        onSend(cap);
-        if (mode_ == ProbeMode::kOneshot) {
-          preparing_ = true;
-          nextAllowedMs_ = millis() + kProbeGapMs;
-        } else {
-          waitingForAlert_ = true;
-          alertStartMs_ = millis();
-        }
-      }
-      preparing_ = false;
-      return;
-    }
-
-    if (waitingForAlert_) {
-      if (alertDetected()) {
-        stop();
-        onHit(activeCap_);
-        return;
-      }
-      if (millis() - alertStartMs_ > kAlertWindowMs) {
-        waitingForAlert_ = false;
-        preparing_ = true;
-        nextAllowedMs_ = millis() + kProbeGapMs;
-      }
-    }
-  }
-
-  bool readyForNext() const { return millis() >= nextAllowedMs_; }
-
-  bool isActive() const { return mode_ != ProbeMode::kNone; }
-
- private:
-  void buildBinarySequence() {
-    sequence_.clear();
-    if (startCap_ > endCap_) {
-      std::swap(startCap_, endCap_);
-    }
-    std::vector<std::pair<uint32_t, uint32_t>> stack;
-    stack.push_back({startCap_, endCap_});
-    while (!stack.empty()) {
-      std::pair<uint32_t, uint32_t> range = stack.back();
-      stack.pop_back();
-      uint32_t start = range.first;
-      uint32_t end = range.second;
-      if (start > end) {
-        continue;
-      }
-      uint32_t mid = start + (end - start) / 2;
-      sequence_.push_back(mid);
-      if (mid > start) {
-        stack.push_back({start, mid - 1});
-      }
-      if (mid < end) {
-        stack.push_back({mid + 1, end});
-      }
-    }
-  }
-
-  uint32_t nextCap() {
-    if (mode_ == ProbeMode::kSequential) {
-      if (currentCap_ > endCap_) {
-        return 0xFFFFFFFF;
-      }
-      uint32_t cap = currentCap_;
-      currentCap_ += step_;
-      return cap;
-    }
-    if (mode_ == ProbeMode::kBinary) {
-      if (currentIndex_ >= sequence_.size()) {
-        return 0xFFFFFFFF;
-      }
-      return sequence_[currentIndex_++];
-    }
-    if (mode_ == ProbeMode::kOneshot) {
-      if (currentIndex_ >= sequence_.size()) {
-        return 0xFFFFFFFF;
-      }
-      return sequence_[currentIndex_++];
-    }
-    return 0xFFFFFFFF;
-  }
-
-  bool alertDetected() {
-    if (alertPin_ < 0) {
-      return false;
-    }
-    int value = digitalRead(alertPin_);
-    if (value == HIGH) {
-      if (!alertHigh_) {
-        alertHigh_ = true;
-        alertHighStartMs_ = millis();
-      }
-      if (millis() - alertHighStartMs_ > 50) {
-        return true;
-      }
-    } else {
-      alertHigh_ = false;
-    }
-    return false;
-  }
-
-  PocsagTx &tx_;
-  const PocsagEncoder &encoder_;
-  int alertPin_ = -1;
-  ProbeMode mode_ = ProbeMode::kNone;
-  uint32_t startCap_ = 0;
-  uint32_t endCap_ = 0;
-  uint32_t step_ = 1;
-  uint32_t currentCap_ = 0;
-  uint32_t activeCap_ = 0;
-  std::vector<uint32_t> sequence_;
-  size_t currentIndex_ = 0;
-  bool preparing_ = false;
-  bool waitingForAlert_ = false;
-  bool alertHigh_ = false;
-  uint32_t alertHighStartMs_ = 0;
-  uint32_t alertStartMs_ = 0;
-  uint32_t nextAllowedMs_ = 0;
-};
-
-void queueStatus(const String &message);
-
-class AutotestController {
- public:
-  AutotestController(PocsagTx &tx, const PocsagEncoder &encoder)
-      : tx_(tx), encoder_(encoder) {}
-
-  void start(uint32_t capcode, uint32_t durationSeconds, uint32_t savedBaud,
-             bool savedInvert, bool savedIdleHigh) {
-    capcode_ = capcode;
-    endTimeMs_ = millis() + durationSeconds * 1000;
-    attempt_ = 0;
-    baudIndex_ = 0;
-    invertIndex_ = 0;
-    idleIndex_ = 0;
-    functionIndex_ = 0;
-    preambleIndex_ = 0;
-    stopRequested_ = false;
-    active_ = true;
-    savedBaud_ = savedBaud;
-    savedInvert_ = savedInvert;
-    savedIdleHigh_ = savedIdleHigh;
-  }
-
-  void requestStop() { stopRequested_ = true; }
-
-  bool isActive() const { return active_; }
-
-  void update() {
-    if (!active_) {
-      return;
-    }
-    if (tx_.isBusy()) {
-      return;
-    }
-    if (stopRequested_ || millis() >= endTimeMs_) {
-      finish(stopRequested_ ? "STATUS AUTOTEST STOPPED" : "STATUS AUTOTEST DONE");
-      return;
-    }
-    AutotestSettings settings = currentSettings();
-    ++attempt_;
-    queueStatus(buildAttemptLine(settings));
-    tx_.setBaud(settings.baud);
-    tx_.setInvert(settings.invert);
-    tx_.setIdleHigh(settings.idleHigh);
-    auto bits = buildAutotestBits(settings);
-    if (!tx_.sendBits(std::move(bits))) {
-      queueStatus("ERROR AUTOTEST TX_BUSY");
-      return;
-    }
-    advance();
-  }
-
- private:
-  struct AutotestSettings {
-    uint32_t baud = 512;
-    bool invert = false;
-    bool idleHigh = true;
-    uint8_t functionBits = 0;
-    uint32_t preambleBits = 576;
-  };
-
-  static constexpr uint32_t kBauds[] = {512};
-  static constexpr bool kInverts[] = {false, true};
-  static constexpr bool kIdleHighs[] = {true, false};
-  static constexpr uint32_t kPreambles[] = {576, 1152, 2304};
-  static constexpr size_t kBaudCount = sizeof(kBauds) / sizeof(kBauds[0]);
-  static constexpr size_t kInvertCount = sizeof(kInverts) / sizeof(kInverts[0]);
-  static constexpr size_t kIdleHighCount = sizeof(kIdleHighs) / sizeof(kIdleHighs[0]);
-  static constexpr size_t kPreambleCount = sizeof(kPreambles) / sizeof(kPreambles[0]);
-
-  AutotestSettings currentSettings() const {
-    AutotestSettings settings;
-    settings.baud = kBauds[baudIndex_];
-    settings.invert = kInverts[invertIndex_];
-    settings.idleHigh = kIdleHighs[idleIndex_];
-    settings.functionBits = static_cast<uint8_t>(functionIndex_);
-    settings.preambleBits = kPreambles[preambleIndex_];
-    return settings;
-  }
-
-  String buildAttemptLine(const AutotestSettings &settings) const {
-    String line = "AUTOTEST #" + String(attempt_) + " CAP=" + String(capcode_) +
-                  " BAUD=" + String(settings.baud) +
-                  " INVERT=" + String(settings.invert ? 1 : 0) +
-                  " IDLE=" + String(settings.idleHigh ? 1 : 0) +
-                  " FUNC=" + String(settings.functionBits) +
-                  " PREAMBLE=" + String(settings.preambleBits);
-    return line;
-  }
-
-  void advance() {
-    ++preambleIndex_;
-    if (preambleIndex_ >= kPreambleCount) {
-      preambleIndex_ = 0;
-      ++functionIndex_;
-      if (functionIndex_ >= 4) {
-        functionIndex_ = 0;
-        ++idleIndex_;
-        if (idleIndex_ >= kIdleHighCount) {
-          idleIndex_ = 0;
-          ++invertIndex_;
-          if (invertIndex_ >= kInvertCount) {
-            invertIndex_ = 0;
-            ++baudIndex_;
-            if (baudIndex_ >= kBaudCount) {
-              baudIndex_ = 0;
-            }
-          }
-        }
-      }
-    }
-  }
-
-  std::vector<uint8_t> buildAutotestBits(const AutotestSettings &settings) const {
-    std::vector<uint8_t> bits;
-    bits.reserve(settings.preambleBits + (1 + 16) * 32);
-    for (uint32_t i = 0; i < settings.preambleBits; ++i) {
-      bits.push_back(static_cast<uint8_t>((i % 2) == 0));
-    }
-    appendWordBits(bits, kSyncWord);
-    uint32_t ric = capcode_ / 2;
-    uint8_t frame = ric % 8;
-    uint32_t addressWord = encoder_.buildAddressCodeword(capcode_, settings.functionBits);
-    for (uint8_t frameIndex = 0; frameIndex < 8; ++frameIndex) {
-      if (frameIndex == frame) {
-        appendWordBits(bits, addressWord);
-        appendWordBits(bits, kIdleWord);
-      } else {
-        appendWordBits(bits, kIdleWord);
-        appendWordBits(bits, kIdleWord);
-      }
-    }
-    return bits;
-  }
-
-  void finish(const String &status) {
-    active_ = false;
-    stopRequested_ = false;
-    tx_.setBaud(savedBaud_);
-    tx_.setInvert(savedInvert_);
-    tx_.setIdleHigh(savedIdleHigh_);
-    queueStatus(status);
-  }
-
-  PocsagTx &tx_;
-  const PocsagEncoder &encoder_;
-  bool active_ = false;
-  bool stopRequested_ = false;
-  uint32_t capcode_ = 0;
-  uint32_t endTimeMs_ = 0;
-  size_t attempt_ = 0;
-  size_t baudIndex_ = 0;
-  size_t invertIndex_ = 0;
-  size_t idleIndex_ = 0;
-  size_t functionIndex_ = 0;
-  size_t preambleIndex_ = 0;
-  uint32_t savedBaud_ = kDefaultBaud;
-  bool savedInvert_ = kDefaultInvert;
-  bool savedIdleHigh_ = kDefaultIdleLineHigh;
-};
-
-constexpr uint32_t AutotestController::kBauds[];
-constexpr bool AutotestController::kInverts[];
-constexpr bool AutotestController::kIdleHighs[];
-constexpr uint32_t AutotestController::kPreambles[];
-
-class AutotestFastController {
- public:
-  explicit AutotestFastController(PocsagTx &tx) : tx_(tx) {}
-
-  void start(uint32_t durationSeconds, uint32_t savedBaud, bool savedInvert, bool savedIdleHigh,
-             OutputMode savedOutputMode) {
-    capcode_ = kDefaultCapcodeInd;
-    startTimeMs_ = millis();
-    endTimeMs_ = startTimeMs_ + durationSeconds * 1000;
-    comboStartMs_ = 0;
-    comboEndMs_ = 0;
-    invertIndex_ = 0;
-    functionIndex_ = 0;
-    preambleIndex_ = 0;
-    stopRequested_ = false;
-    active_ = true;
-    nextAllowedMs_ = 0;
-    attempt_ = 0;
-    savedBaud_ = savedBaud;
-    savedInvert_ = savedInvert;
-    savedIdleHigh_ = savedIdleHigh;
-    savedOutputMode_ = savedOutputMode;
-    tx_.setOutputMode(OutputMode::kOpenDrain);
-  }
-
-  void requestStop() { stopRequested_ = true; }
-
-  bool isActive() const { return active_; }
-
-  void update() {
-    if (!active_) {
-      return;
-    }
-    if (tx_.isBusy()) {
-      return;
-    }
-    if (stopRequested_ || millis() >= endTimeMs_) {
-      finish(stopRequested_ ? "STATUS AUTOTEST_FAST STOPPED" : "STATUS AUTOTEST_FAST DONE");
-      return;
-    }
-    if (millis() < nextAllowedMs_) {
-      return;
-    }
-    if (!ensureComboWindow()) {
-      finish("STATUS AUTOTEST_FAST DONE");
-      return;
-    }
-    if (!send_min_page_with_settings(capcode_, currentSettings_.functionBits,
-                                     currentSettings_.preambleMs, kFixedBaud,
-                                     currentSettings_.invert, configuredIdleHigh,
-                                     OutputMode::kOpenDrain)) {
-      queueStatus("ERROR AUTOTEST_FAST TX_BUSY");
-      return;
-    }
-    nextAllowedMs_ = millis() + kFastGapMs;
-  }
-
- private:
-  struct AutotestFastSettings {
-    bool invert = false;
-    uint8_t functionBits = 0;
-    uint32_t preambleMs = 800;
-  };
-
-  static constexpr uint32_t kFixedBaud = 512;
-  static constexpr bool kInverts[] = {false, true};
-  static constexpr uint32_t kPreamblesMs[] = {800, 1500, 2500};
-  static constexpr size_t kInvertCount = sizeof(kInverts) / sizeof(kInverts[0]);
-  static constexpr size_t kPreambleCount = sizeof(kPreamblesMs) / sizeof(kPreamblesMs[0]);
-  static constexpr uint32_t kFastGapMs = 200;
-  static constexpr uint32_t kComboDurationMs = 1000;
-
-  AutotestFastSettings currentSettings() const {
-    AutotestFastSettings settings;
-    settings.invert = kInverts[invertIndex_];
-    settings.functionBits = static_cast<uint8_t>(functionIndex_);
-    settings.preambleMs = kPreamblesMs[preambleIndex_];
-    return settings;
-  }
-
-  String buildAttemptLine(const AutotestFastSettings &settings) const {
-    String line = "FAST invert=" + String(settings.invert ? 1 : 0) +
-                  " func=" + String(settings.functionBits) +
-                  " preamble=" + String(settings.preambleMs) + "ms output=OPEN_DRAIN";
-    return line;
-  }
-
-  uint32_t comboDurationMs() const {
-    (void)startTimeMs_;
-    (void)endTimeMs_;
-    return kComboDurationMs;
-  }
-
-  bool ensureComboWindow() {
-    uint32_t now = millis();
-    if (comboStartMs_ == 0 || now >= comboEndMs_) {
-      currentSettings_ = currentSettings();
-      ++attempt_;
-      queueStatus(buildAttemptLine(currentSettings_));
-      comboStartMs_ = now;
-      comboEndMs_ = now + comboDurationMs();
-      advance();
-    }
-    return true;
-  }
-
-  void advance() {
-    ++preambleIndex_;
-    if (preambleIndex_ >= kPreambleCount) {
-      preambleIndex_ = 0;
-      ++functionIndex_;
-      if (functionIndex_ >= 4) {
-        functionIndex_ = 0;
-        ++invertIndex_;
-        if (invertIndex_ >= kInvertCount) {
-          invertIndex_ = 0;
-        }
-      }
-    }
-  }
-
-  void finish(const String &status) {
-    active_ = false;
-    stopRequested_ = false;
-    tx_.setBaud(savedBaud_);
-    tx_.setInvert(savedInvert_);
-    tx_.setIdleHigh(savedIdleHigh_);
-    tx_.setOutputMode(savedOutputMode_);
-    queueStatus(status);
-  }
-
-  PocsagTx &tx_;
-  bool active_ = false;
-  bool stopRequested_ = false;
-  uint32_t capcode_ = 0;
-  uint32_t startTimeMs_ = 0;
-  uint32_t endTimeMs_ = 0;
-  uint32_t comboStartMs_ = 0;
-  uint32_t comboEndMs_ = 0;
-  uint32_t nextAllowedMs_ = 0;
-  size_t attempt_ = 0;
-  size_t invertIndex_ = 0;
-  size_t functionIndex_ = 0;
-  size_t preambleIndex_ = 0;
-  AutotestFastSettings currentSettings_;
-  uint32_t savedBaud_ = kDefaultBaud;
-  bool savedInvert_ = kDefaultInvert;
-  bool savedIdleHigh_ = kDefaultIdleLineHigh;
-  OutputMode savedOutputMode_ = kDefaultOutputMode;
-};
-
-constexpr bool AutotestFastController::kInverts[];
-constexpr uint32_t AutotestFastController::kPreamblesMs[];
-
-class MinLoopController {
- public:
-  explicit MinLoopController(PocsagTx &tx) : tx_(tx) {}
-
-  void start(uint32_t capcode, uint8_t functionBits, uint32_t preambleMs,
-             uint32_t durationSeconds) {
-    capcode_ = capcode;
-    functionBits_ = functionBits;
-    preambleMs_ = preambleMs;
-    endTimeMs_ = millis() + durationSeconds * 1000;
-    nextAllowedMs_ = 0;
-    active_ = true;
-    stopRequested_ = false;
-  }
-
-  void requestStop() { stopRequested_ = true; }
-
-  bool isActive() const { return active_; }
-
-  void update() {
-    if (!active_) {
-      return;
-    }
-    if (stopRequested_ || millis() >= endTimeMs_) {
-      finish(stopRequested_ ? "STATUS SEND_MIN_LOOP STOPPED" : "STATUS SEND_MIN_LOOP DONE");
-      return;
-    }
-    if (tx_.isBusy()) {
-      return;
-    }
-    if (millis() < nextAllowedMs_) {
-      return;
-    }
-    if (!send_min_page(capcode_, functionBits_, preambleMs_)) {
-      queueStatus("ERROR SEND_MIN_LOOP TX_BUSY");
-      return;
-    }
-    nextAllowedMs_ = millis() + kLoopGapMs;
-  }
-
- private:
-  static constexpr uint32_t kLoopGapMs = 200;
-
-  void finish(const String &status) {
-    active_ = false;
-    stopRequested_ = false;
-    queueStatus(status);
-  }
-
-  PocsagTx &tx_;
-  bool active_ = false;
-  bool stopRequested_ = false;
-  uint32_t capcode_ = 0;
-  uint8_t functionBits_ = 0;
-  uint32_t preambleMs_ = 0;
-  uint32_t endTimeMs_ = 0;
-  uint32_t nextAllowedMs_ = 0;
-};
-
-class Autotest2Controller {
- public:
-  explicit Autotest2Controller(PocsagTx &tx) : tx_(tx) {}
-
-  void start(uint32_t capcode, uint32_t durationSeconds, uint32_t savedBaud,
-             bool savedInvert, bool savedIdleHigh, OutputMode savedOutputMode,
-             int savedGpio, const String &gpioList) {
-    capcode_ = capcode;
-    endTimeMs_ = millis() + durationSeconds * 1000;
-    attempt_ = 0;
-    baudIndex_ = 0;
-    invertIndex_ = 0;
-    idleIndex_ = 0;
-    functionIndex_ = 0;
-    preambleIndex_ = 0;
-    profileIndex_ = 0;
-    gpioIndex_ = 0;
-    stopRequested_ = false;
-    active_ = true;
-    dwellActive_ = false;
-    dwellStartMs_ = 0;
-    nextSendMs_ = 0;
-    lastYieldMs_ = millis();
-    savedBaud_ = savedBaud;
-    savedInvert_ = savedInvert;
-    savedIdleHigh_ = savedIdleHigh;
-    savedOutputMode_ = savedOutputMode;
-    savedGpio_ = savedGpio;
-    gpioList_ = parseGpioList(gpioList);
-    if (gpioList_.empty()) {
-      gpioList_.push_back(savedGpio_);
-    }
-    currentGpio_ = -1;
-  }
-
-  void requestStop() { stopRequested_ = true; }
-
-  bool isActive() const { return active_; }
-
-  void update() {
-    if (!active_) {
-      return;
-    }
-    maybeYield();
-    if (stopRequested_ || millis() >= endTimeMs_) {
-      finish(stopRequested_ ? "STATUS AUTOTEST2 STOPPED" : "STATUS AUTOTEST2 DONE");
-      return;
-    }
-    if (tx_.isBusy()) {
-      return;
-    }
-    uint32_t now = millis();
-    if (!dwellActive_) {
-      startCase(now);
-    }
-    if (now - dwellStartMs_ >= kAutotestDwellMs) {
-      dwellActive_ = false;
-      advance();
-      return;
-    }
-    if (now < nextSendMs_) {
-      return;
-    }
-    if (!send_min_page(activeSettings_.profile, capcode_, activeSettings_.functionBits,
-                       activeSettings_.baud, activeSettings_.invert, activeSettings_.idleHigh,
-                       activeSettings_.preambleBits)) {
-      queueStatus("ERROR AUTOTEST2 TX_BUSY");
-      return;
-    }
-    nextSendMs_ = now + random(kAutotestGapMinMs, kAutotestGapMaxMs + 1);
-  }
-
- private:
-  struct AutotestSettings {
-    InjectionProfile profile = InjectionProfile::kNrzSliced;
-    uint32_t baud = 512;
-    bool invert = false;
-    bool idleHigh = true;
-    uint8_t functionBits = 0;
-    uint32_t preambleBits = 576;
-    int gpio = -1;
-  };
-
-  static constexpr uint32_t kBauds[] = {512, 1200, 2400};
-  static constexpr bool kInverts[] = {false, true};
-  static constexpr bool kIdleHighs[] = {true, false};
-  static constexpr uint32_t kPreambles[] = {576, 1152, 2304};
-  static constexpr InjectionProfile kProfiles[] = {
-      InjectionProfile::kNrzSliced, InjectionProfile::kNrzPushPull,
-      InjectionProfile::kManchester, InjectionProfile::kDiscrimAudioFsk,
-      InjectionProfile::kSlicerEdgePulse};
-  static constexpr size_t kBaudCount = sizeof(kBauds) / sizeof(kBauds[0]);
-  static constexpr size_t kInvertCount = sizeof(kInverts) / sizeof(kInverts[0]);
-  static constexpr size_t kIdleHighCount = sizeof(kIdleHighs) / sizeof(kIdleHighs[0]);
-  static constexpr size_t kPreambleCount = sizeof(kPreambles) / sizeof(kPreambles[0]);
-  static constexpr size_t kProfileCount = sizeof(kProfiles) / sizeof(kProfiles[0]);
-  static constexpr uint32_t kAutotestDwellMs = 3000;
-  static constexpr uint32_t kAutotestGapMinMs = 50;
-  static constexpr uint32_t kAutotestGapMaxMs = 150;
-  static constexpr uint32_t kAutotestYieldMs = 10;
-
-  AutotestSettings currentSettings() const {
-    AutotestSettings settings;
-    settings.profile = kProfiles[profileIndex_];
-    settings.baud = kBauds[baudIndex_];
-    settings.invert = kInverts[invertIndex_];
-    settings.idleHigh = settings.profile == InjectionProfile::kNrzSliced
-                            ? true
-                            : kIdleHighs[idleIndex_];
-    settings.functionBits = static_cast<uint8_t>(functionIndex_);
-    settings.preambleBits = kPreambles[preambleIndex_];
-    settings.gpio = gpioList_[gpioIndex_];
-    return settings;
-  }
-
-  String buildAttemptLine(const AutotestSettings &settings) const {
-    String line = "AUTOTEST2 #" + String(attempt_) + " GPIO=" + String(settings.gpio) +
-                  " PROFILE=" + injectionProfileName(settings.profile) +
-                  " BAUD=" + String(settings.baud) +
-                  " INVERT=" + String(settings.invert ? 1 : 0) +
-                  " IDLE=" + String(settings.idleHigh ? 1 : 0) +
-                  " FUNC=" + String(settings.functionBits) +
-                  " PREAMBLE=" + String(settings.preambleBits);
-    return line;
-  }
-
-  void advance() {
-    ++preambleIndex_;
-    if (preambleIndex_ >= kPreambleCount) {
-      preambleIndex_ = 0;
-      ++functionIndex_;
-      if (functionIndex_ >= 4) {
-        functionIndex_ = 0;
-        const bool sweepIdle = kProfiles[profileIndex_] != InjectionProfile::kNrzSliced;
-        if (sweepIdle) {
-          ++idleIndex_;
-          if (idleIndex_ < kIdleHighCount) {
-            return;
-          }
-          idleIndex_ = 0;
-        } else {
-          idleIndex_ = 0;
-        }
-        ++invertIndex_;
-        if (invertIndex_ >= kInvertCount) {
-          invertIndex_ = 0;
-          ++baudIndex_;
-          if (baudIndex_ >= kBaudCount) {
-            baudIndex_ = 0;
-            ++profileIndex_;
-            if (profileIndex_ >= kProfileCount) {
-              profileIndex_ = 0;
-              ++gpioIndex_;
-              if (gpioIndex_ >= gpioList_.size()) {
-                gpioIndex_ = 0;
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-
-  void startCase(uint32_t nowMs) {
-    activeSettings_ = currentSettings();
-    ++attempt_;
-    queueStatus(buildAttemptLine(activeSettings_));
-    if (activeSettings_.gpio != currentGpio_) {
-      currentGpio_ = activeSettings_.gpio;
-      tx_.begin(currentGpio_, activeSettings_.invert, activeSettings_.baud,
-                configuredOutputMode, activeSettings_.idleHigh);
-    }
-    dwellStartMs_ = nowMs;
-    nextSendMs_ = nowMs;
-    dwellActive_ = true;
-  }
-
-  void maybeYield() {
-    uint32_t now = millis();
-    if (now - lastYieldMs_ >= kAutotestYieldMs) {
-      lastYieldMs_ = now;
-      vTaskDelay(1);
-    }
-  }
-
-  void finish(const String &status) {
-    active_ = false;
-    stopRequested_ = false;
-    tx_.begin(savedGpio_, savedInvert_, savedBaud_, savedOutputMode_, savedIdleHigh_);
-    queueStatus(status);
-  }
-
-  PocsagTx &tx_;
-  bool active_ = false;
-  bool stopRequested_ = false;
-  uint32_t capcode_ = 0;
-  uint32_t endTimeMs_ = 0;
-  size_t attempt_ = 0;
-  size_t baudIndex_ = 0;
-  size_t invertIndex_ = 0;
-  size_t idleIndex_ = 0;
-  size_t functionIndex_ = 0;
-  size_t preambleIndex_ = 0;
-  size_t profileIndex_ = 0;
-  size_t gpioIndex_ = 0;
-  bool dwellActive_ = false;
-  AutotestSettings activeSettings_;
-  uint32_t dwellStartMs_ = 0;
-  uint32_t nextSendMs_ = 0;
-  uint32_t lastYieldMs_ = 0;
-  uint32_t savedBaud_ = kDefaultBaud;
-  bool savedInvert_ = kDefaultInvert;
-  bool savedIdleHigh_ = kDefaultIdleLineHigh;
-  OutputMode savedOutputMode_ = kDefaultOutputMode;
-  int savedGpio_ = kDataGpio;
-  int currentGpio_ = -1;
-  std::vector<int> gpioList_;
-};
-
-constexpr uint32_t Autotest2Controller::kBauds[];
-constexpr bool Autotest2Controller::kInverts[];
-constexpr bool Autotest2Controller::kIdleHighs[];
-constexpr uint32_t Autotest2Controller::kPreambles[];
-constexpr InjectionProfile Autotest2Controller::kProfiles[];
-
-class OriginalAdvisorController {
- public:
-  explicit OriginalAdvisorController(PocsagTx &tx) : tx_(tx) {}
-
-  void start() {
-    savedBaud_ = configuredBaud;
-    savedInvert_ = configuredInvert;
-    savedIdleHigh_ = configuredIdleHigh;
-    savedOutputMode_ = configuredOutputMode;
-    savedPreambleMs_ = configuredDefaultPreambleMs;
-    configuredBaud = kDefaultBaud;
-    configuredOutputMode = OutputMode::kOpenDrain;
-    configuredIdleHigh = true;
-    configuredDefaultPreambleMs = 2000;
-    tx_.setBaud(configuredBaud);
-    tx_.setOutputMode(configuredOutputMode);
-    tx_.setIdleHigh(configuredIdleHigh);
-    stage_ = Stage::kStatus;
-    stageStartMs_ = millis();
-    stageEndMs_ = 0;
-    nextSendMs_ = 0;
-    rfSenseStartCount_ = rfSensePulseCount;
-    firstInvert_ = configuredInvert;
-    active_ = true;
-    debugStarted_ = false;
-    queueStatus("STATUS ORIGINAL_ADVISOR_TEST START");
-  }
-
-  bool isActive() const { return active_; }
-
-  void update() {
-    if (!active_) {
-      return;
-    }
-    updateRfSensePulseWidth();
-    switch (stage_) {
-      case Stage::kStatus:
-        queueStatus(buildStatusLine());
-        if (configuredRfSenseGpio >= 0) {
-          stage_ = Stage::kWaitRfSense;
-          stageStartMs_ = millis();
-          rfSenseStartCount_ = rfSensePulseCount;
-        } else {
-          stage_ = Stage::kDebugScope;
-        }
-        break;
-      case Stage::kWaitRfSense: {
-        bool seen = rfSensePulseCount != rfSenseStartCount_;
-        if (seen || millis() - stageStartMs_ >= kRfSenseWaitMs) {
-          queueStatus(String("RFSENSE pulses_seen=") + (seen ? "1" : "0"));
-          stage_ = Stage::kDebugScope;
-        }
-        break;
-      }
-      case Stage::kDebugScope:
-        if (!debugStarted_) {
-          if (tx_.isBusy()) {
-            return;
-          }
-          if (!startDebugScope()) {
-            finish("ERROR ORIGINAL_ADVISOR_TEST DEBUG_SCOPE");
-            return;
-          }
-          debugStarted_ = true;
-          return;
-        }
-        if (!pendingDebugScope && !tx_.isBusy()) {
-          stage_ = Stage::kMinLoopFirst;
-          startMinLoop(firstInvert_);
-        }
-        break;
-      case Stage::kMinLoopFirst:
-        runMinLoop();
-        break;
-      case Stage::kMinLoopSecond:
-        runMinLoop();
-        break;
-      case Stage::kDone:
-        finish("STATUS ORIGINAL_ADVISOR_TEST DONE");
-        break;
-    }
-  }
-
- private:
-  enum class Stage {
-    kStatus,
-    kWaitRfSense,
-    kDebugScope,
-    kMinLoopFirst,
-    kMinLoopSecond,
-    kDone,
-  };
-
-  static constexpr uint32_t kMinLoopDurationMs = 20000;
-  static constexpr uint32_t kMinLoopGapMs = 200;
-  static constexpr uint32_t kRfSenseWaitMs = 5000;
-
-  bool startDebugScope() {
-    std::vector<uint8_t> bits = buildAlternatingBitsForBaud(2000, kDefaultBaud);
-    tx_.setOutputMode(configuredOutputMode);
-    tx_.setInvert(configuredInvert);
-    tx_.setIdleHigh(configuredIdleHigh);
-    debugScopeRestoreBaud = configuredBaud;
-    tx_.setBaud(kDefaultBaud);
-    if (!tx_.sendBits(std::move(bits))) {
-      return false;
-    }
-    pendingDebugScope = true;
-    queueStatus("STATUS DEBUG_SCOPE START");
-    return true;
-  }
-
-  void startMinLoop(bool invert) {
-    configuredInvert = invert;
-    tx_.setInvert(configuredInvert);
-    stageStartMs_ = millis();
-    stageEndMs_ = stageStartMs_ + kMinLoopDurationMs;
-    nextSendMs_ = 0;
-    queueStatus(String("STATUS ORIGINAL_ADVISOR_TEST MIN_LOOP START invert=") +
-                (invert ? "1" : "0"));
-  }
-
-  void runMinLoop() {
-    uint32_t now = millis();
-    if (now >= stageEndMs_) {
-      if (!tx_.isBusy()) {
-        if (stage_ == Stage::kMinLoopFirst) {
-          stage_ = Stage::kMinLoopSecond;
-          startMinLoop(!firstInvert_);
-        } else {
-          stage_ = Stage::kDone;
-        }
-      }
-      return;
-    }
-    if (tx_.isBusy()) {
-      return;
-    }
-    if (nextSendMs_ != 0 && now < nextSendMs_) {
-      return;
-    }
-    if (!send_min_page_with_settings(kDefaultCapcodeInd, 0, 2000, kDefaultBaud,
-                                     configuredInvert, true, OutputMode::kOpenDrain)) {
-      queueStatus("ERROR ORIGINAL_ADVISOR_TEST TX_BUSY");
-      return;
-    }
-    nextSendMs_ = now + kMinLoopGapMs;
-  }
-
-  void finish(const String &status) {
-    active_ = false;
-    configuredBaud = savedBaud_;
-    configuredInvert = savedInvert_;
-    configuredIdleHigh = savedIdleHigh_;
-    configuredOutputMode = savedOutputMode_;
-    configuredDefaultPreambleMs = savedPreambleMs_;
-    tx_.setBaud(configuredBaud);
-    tx_.setInvert(configuredInvert);
-    tx_.setIdleHigh(configuredIdleHigh);
-    tx_.setOutputMode(configuredOutputMode);
-    queueStatus(status);
-  }
-
-  PocsagTx &tx_;
-  bool active_ = false;
-  Stage stage_ = Stage::kStatus;
-  uint32_t stageStartMs_ = 0;
-  uint32_t stageEndMs_ = 0;
-  uint32_t nextSendMs_ = 0;
-  uint32_t rfSenseStartCount_ = 0;
-  bool debugStarted_ = false;
-  bool firstInvert_ = false;
-  uint32_t savedBaud_ = kDefaultBaud;
-  bool savedInvert_ = kDefaultInvert;
-  bool savedIdleHigh_ = kDefaultIdleLineHigh;
-  OutputMode savedOutputMode_ = kDefaultOutputMode;
-  uint32_t savedPreambleMs_ = kDefaultPreambleMs;
-};
-
-class CommandParser {
- public:
-  using Handler = std::function<void(const std::vector<String> &)>;
-
-  void setHandler(Handler handler) { handler_ = std::move(handler); }
-
-  void handleInput(const String &input) {
-    int start = 0;
-    while (start < input.length()) {
-      int end = input.indexOf('\n', start);
-      if (end < 0) {
-        end = input.length();
-      }
-      String line = input.substring(start, end);
-      line.trim();
-      if (line.length() > 0) {
-        parseLine(line);
-      }
-      start = end + 1;
-    }
-  }
-
- private:
-  void parseLine(const String &line) {
-    if (line.startsWith("{")) {
-      String cmdLine = parseJson(line);
-      if (cmdLine.length() > 0) {
-        parseLine(cmdLine);
-      }
-      return;
-    }
-
-    std::vector<String> tokens;
-    splitTokens(line, tokens);
-    if (!tokens.empty() && handler_) {
-      handler_(tokens);
-    }
-  }
-
-  String parseJson(const String &line) {
-    String cmd = getJsonString(line, "cmd");
-    if (cmd.length() == 0) {
-      cmd = getJsonString(line, "command");
-    }
-    cmd.toUpperCase();
-    if (cmd.length() == 0) {
-      return "";
-    }
-    if (cmd == "PAGE") {
-      String cap = getJsonString(line, "capcode");
-      String text = getJsonString(line, "text");
-      if (cap.length() > 0) {
-        return cmd + " " + cap + " " + text;
-      }
-      return cmd + " " + text;
-    }
-    if (cmd == "SET") {
-      String key = getJsonString(line, "key");
-      String value = getJsonString(line, "value");
-      if (key.length() > 0 && value.length() > 0) {
-        return cmd + " " + key + " " + value;
-      }
-    }
-    if (cmd == "PROBE") {
-      String mode = getJsonString(line, "mode");
-      mode.toUpperCase();
-      if (mode.length() > 0) {
-        String start = getJsonString(line, "startCap");
-        String end = getJsonString(line, "endCap");
-        String step = getJsonString(line, "step");
-        if (mode == "START" && step.length() > 0) {
-          return cmd + " START " + start + " " + end + " " + step;
-        }
-        if (mode == "BINARY") {
-          return cmd + " BINARY " + start + " " + end;
-        }
-      }
-    }
-    return cmd;
-  }
-
-  String getJsonString(const String &line, const char *key) {
-    String pattern = String("\"") + key + "\"";
-    int keyIndex = line.indexOf(pattern);
-    if (keyIndex < 0) {
-      return "";
-    }
-    int colon = line.indexOf(':', keyIndex + pattern.length());
-    if (colon < 0) {
-      return "";
-    }
-    int start = colon + 1;
-    while (start < line.length() && isspace(static_cast<unsigned char>(line[start]))) {
-      ++start;
-    }
-    if (start >= line.length()) {
-      return "";
-    }
-    if (line[start] == '"') {
-      int end = line.indexOf('"', start + 1);
-      if (end < 0) {
-        return "";
-      }
-      return line.substring(start + 1, end);
-    }
-    int end = start;
-    while (end < line.length() && line[end] != ',' && line[end] != '}' &&
-           !isspace(static_cast<unsigned char>(line[end]))) {
-      ++end;
-    }
-    return line.substring(start, end);
-  }
-
-  void splitTokens(const String &line, std::vector<String> &tokens) {
-    bool inQuotes = false;
-    String current;
-    for (size_t i = 0; i < line.length(); ++i) {
-      char c = line[i];
-      if (c == '"') {
-        inQuotes = !inQuotes;
-        continue;
-      }
-      if (!inQuotes && isspace(static_cast<unsigned char>(c))) {
-        if (current.length() > 0) {
-          tokens.push_back(current);
-          current.clear();
-        }
-        continue;
-      }
-      current += c;
-    }
-    if (current.length() > 0) {
-      tokens.push_back(current);
-    }
-  }
-
-  Handler handler_;
-};
-
 static PocsagEncoder encoder;
-static PocsagTx tx;
-static PageStore pageStore(kPageStoreCapacity);
-static ProbeController probe(tx, encoder);
-static AutotestController autotest(tx, encoder);
-static AutotestFastController autotestFast(tx);
-static Autotest2Controller autotest2(tx);
-static MinLoopController minLoop(tx);
-static OriginalAdvisorController originalAdvisor(tx);
-static CommandParser parser;
+static std::vector<uint8_t> txBits;
 
-static std::deque<TxRequest> txQueue;
-static uint32_t configuredCapcodeInd = kDefaultCapcodeInd;
-static uint32_t configuredCapcodeGrp = kDefaultCapcodeGrp;
-uint32_t configuredBaud = kDefaultBaud;
-bool configuredInvert = kDefaultInvert;
-OutputMode configuredOutputMode = OutputMode::kOpenDrain;
-static int configuredDataGpio = kDataGpio;
-static String configuredGpioList;
-bool configuredIdleHigh = kDefaultIdleLineHigh;
-static bool configuredAutoProbe = false;
-static bool pendingStoredPage = false;
-static bool capGrpWasExplicitlySet = false;
-static uint8_t configuredDefaultFunction = kDefaultFunctionBits;
-uint32_t configuredDefaultPreambleMs = kDefaultPreambleMs;
-bool pendingDebugScope = false;
-uint32_t debugScopeRestoreBaud = kDefaultBaud;
-int configuredRfSenseGpio = kRfSenseGpio;
-static portMUX_TYPE rfSenseMux = portMUX_INITIALIZER_UNLOCKED;
-volatile uint32_t rfSensePulseCount = 0;
-static volatile uint32_t rfSenseLastRiseUs = 0;
-static volatile uint32_t rfSenseLastPulseMs = 0;
-static volatile bool rfSensePulseHighPending = false;
-static volatile bool rfSenseWindowActive = false;
-static volatile uint32_t rfSenseWindowPulseCount = 0;
-static volatile uint32_t rfSenseWindowPeriodCount = 0;
-static volatile uint64_t rfSenseWindowPeriodSumUs = 0;
-static volatile uint32_t rfSenseWindowMinWidthUs = 0;
-static volatile uint32_t rfSenseWindowMaxWidthUs = 0;
-
-static String serialBuffer;
-
-void emitStatus(const String &message) {
-  statusQueue.push_back(message);
-  if (Serial) {
-    Serial.println(message);
+static void applyLineState(bool logicalHigh) {
+  bool bit = txInvert ? !logicalHigh : logicalHigh;
+  if (txOutput == OutputMode::kOpenDrain) {
+    if (bit) {
+      pinMode(txGpio, INPUT);
+    } else {
+      pinMode(txGpio, OUTPUT);
+      digitalWrite(txGpio, LOW);
+    }
+  } else {
+    pinMode(txGpio, OUTPUT);
+    digitalWrite(txGpio, bit ? HIGH : LOW);
   }
 }
 
-void queueStatus(const String &message) {
-  emitStatus(message);
-}
-
-void IRAM_ATTR rfSenseRiseIsr() {
-  uint32_t nowUs = micros();
-  uint32_t nowMs = millis();
-  portENTER_CRITICAL_ISR(&rfSenseMux);
-  ++rfSensePulseCount;
-  if (rfSenseWindowActive) {
-    ++rfSenseWindowPulseCount;
-    if (rfSenseLastRiseUs != 0) {
-      rfSenseWindowPeriodSumUs += (nowUs - rfSenseLastRiseUs);
-      ++rfSenseWindowPeriodCount;
+static void IRAM_ATTR onTxTimer() {
+  portENTER_CRITICAL_ISR(&txMux);
+  if (!txActive || txIndex >= txSize) {
+    txActive = false;
+    if (txTimer) {
+      timerAlarmDisable(txTimer);
+    }
+    portEXIT_CRITICAL_ISR(&txMux);
+    return;
+  }
+  bool bit = txData[txIndex++] != 0;
+  portEXIT_CRITICAL_ISR(&txMux);
+  applyLineState(bit);
+  if (txIndex >= txSize) {
+    txActive = false;
+    if (txTimer) {
+      timerAlarmDisable(txTimer);
     }
   }
-  rfSenseLastRiseUs = nowUs;
-  rfSenseLastPulseMs = nowMs;
-  rfSensePulseHighPending = true;
-  portEXIT_CRITICAL_ISR(&rfSenseMux);
 }
 
-void configureRfSenseGpio(int gpio) {
-  if (configuredRfSenseGpio >= 0) {
-    detachInterrupt(digitalPinToInterrupt(configuredRfSenseGpio));
-  }
-  configuredRfSenseGpio = gpio;
-  if (configuredRfSenseGpio >= 0) {
-    pinMode(configuredRfSenseGpio, INPUT);
-    attachInterrupt(digitalPinToInterrupt(configuredRfSenseGpio), rfSenseRiseIsr, RISING);
-  }
-}
-
-void resetRfSenseWindow() {
-  portENTER_CRITICAL(&rfSenseMux);
-  rfSenseWindowActive = true;
-  rfSenseWindowPulseCount = 0;
-  rfSenseWindowPeriodCount = 0;
-  rfSenseWindowPeriodSumUs = 0;
-  rfSenseWindowMinWidthUs = 0;
-  rfSenseWindowMaxWidthUs = 0;
-  portEXIT_CRITICAL(&rfSenseMux);
-}
-
-void stopRfSenseWindow() {
-  portENTER_CRITICAL(&rfSenseMux);
-  rfSenseWindowActive = false;
-  portEXIT_CRITICAL(&rfSenseMux);
-}
-
-void updateRfSensePulseWidth() {
-  if (configuredRfSenseGpio < 0) {
+static void beginTxTimer() {
+  if (txTimer) {
     return;
   }
-  if (!rfSensePulseHighPending) {
-    return;
-  }
-  if (digitalRead(configuredRfSenseGpio) == HIGH) {
-    return;
-  }
-  uint32_t widthUs = micros() - rfSenseLastRiseUs;
-  portENTER_CRITICAL(&rfSenseMux);
-  if (rfSenseWindowActive) {
-    if (rfSenseWindowMinWidthUs == 0 || widthUs < rfSenseWindowMinWidthUs) {
-      rfSenseWindowMinWidthUs = widthUs;
-    }
-    if (widthUs > rfSenseWindowMaxWidthUs) {
-      rfSenseWindowMaxWidthUs = widthUs;
-    }
-  }
-  rfSensePulseHighPending = false;
-  portEXIT_CRITICAL(&rfSenseMux);
+  txTimer = timerBegin(0, 80, true);
+  timerAttachInterrupt(txTimer, &onTxTimer, true);
 }
 
-void saveSettings() {
-  preferences.putUInt("cap_ind", configuredCapcodeInd);
-  preferences.putUInt("cap_grp", configuredCapcodeGrp);
-  preferences.putUInt("capcode", configuredCapcodeInd);
-  preferences.putUInt("baud", configuredBaud);
-  preferences.putBool("invert", configuredInvert);
-  preferences.putUChar("output", static_cast<uint8_t>(configuredOutputMode));
-  preferences.putInt("dataGpio", configuredDataGpio);
-  preferences.putInt("rfSenseGpio", configuredRfSenseGpio);
-  preferences.putString("gpioList", configuredGpioList);
-  preferences.putBool("idleHigh", configuredIdleHigh);
-  preferences.putBool("autoProbe", configuredAutoProbe);
-  pageStore.persist(preferences);
+static void setIdleLine() {
+  applyLineState(txIdleHigh);
 }
 
-void notifyStatus() {
-  if (statusCharacteristic == nullptr) {
-    return;
-  }
-  if (statusQueue.empty()) {
-    return;
-  }
-  if (statusCharacteristic->getSubscribedCount() == 0) {
-    statusQueue.clear();
-    return;
-  }
-  String message = statusQueue.front();
-  statusQueue.pop_front();
-  statusCharacteristic->setValue(message.c_str());
-  statusCharacteristic->notify();
-}
-
-void enqueuePage(uint32_t capcode, const String &message, bool store) {
-  txQueue.push_back(TxRequest{capcode, message, store});
-}
-
-void enqueueCarrier(uint32_t durationMs) {
-  uint64_t bitCount = (static_cast<uint64_t>(configuredBaud) * durationMs) / 1000;
-  if (bitCount == 0) {
-    bitCount = 1;
-  }
-  std::vector<uint8_t> bits;
-  bits.reserve(static_cast<size_t>(bitCount));
-  for (uint64_t i = 0; i < bitCount; ++i) {
-    bits.push_back(static_cast<uint8_t>((i % 2) == 0));
-  }
-  txQueue.push_back(TxRequest{std::move(bits), "CARRIER"});
-}
-
-void enqueueRawBits(std::vector<uint8_t> &&bits, const String &label) {
-  txQueue.push_back(TxRequest{std::move(bits), label});
-}
-
-std::vector<uint8_t> buildAlternatingBitsForBaud(uint32_t durationMs, uint32_t baud) {
-  uint64_t bitCount = (static_cast<uint64_t>(baud) * durationMs) / 1000;
-  if (bitCount == 0) {
-    bitCount = 1;
-  }
-  std::vector<uint8_t> bits;
-  bits.reserve(static_cast<size_t>(bitCount));
-  for (uint64_t i = 0; i < bitCount; ++i) {
-    bits.push_back(static_cast<uint8_t>((i % 2) == 0));
-  }
-  return bits;
-}
-
-std::vector<uint8_t> buildAlternatingBits(uint32_t durationMs) {
-  return buildAlternatingBitsForBaud(durationMs, configuredBaud);
-}
-
-std::vector<uint8_t> buildTestPattern(uint32_t capcode, uint8_t functionBits,
-                                      const String &message) {
-  std::vector<uint8_t> bits = buildAlternatingBits(2000);
-  std::vector<uint8_t> batchBits = encoder.buildSingleBatch(capcode, functionBits, message);
-  bits.insert(bits.end(), batchBits.begin(), batchBits.end());
-  return bits;
-}
-
-bool send_min_page(InjectionProfile profile, uint32_t capcode, uint8_t functionBits,
-                   uint32_t baud, bool invert, bool idleHigh, uint32_t preambleBits) {
-  std::vector<uint8_t> nrzBits =
-      buildMinimalNrzBits(encoder, capcode, functionBits, preambleBits);
-  EncodedWaveform waveform;
-  switch (profile) {
-    case InjectionProfile::kNrzSliced:
-    case InjectionProfile::kNrzPushPull:
-      waveform.bits = std::move(nrzBits);
-      waveform.baud = baud;
-      break;
-    case InjectionProfile::kManchester:
-      waveform = encodeManchester(nrzBits, baud);
-      break;
-    case InjectionProfile::kDiscrimAudioFsk:
-      waveform = encodeDiscrimAudioFsk(nrzBits, baud);
-      break;
-    case InjectionProfile::kSlicerEdgePulse:
-      waveform = encodeSlicerEdgePulse(nrzBits, baud, idleHigh);
-      break;
-  }
-  if (waveform.bits.empty()) {
+static bool startTx(const std::vector<uint8_t> &bits, uint32_t baud, bool invert,
+                    bool idleHigh, OutputMode outputMode, int dataGpio) {
+  if (txActive) {
     return false;
   }
-  OutputMode outputMode = configuredOutputMode;
-  if (profile == InjectionProfile::kNrzPushPull) {
-    outputMode = OutputMode::kPushPull;
-  }
-  tx.setOutputMode(outputMode);
-  tx.setInvert(invert);
-  tx.setIdleHigh(idleHigh);
-  tx.setBaud(waveform.baud);
-  return tx.sendBits(std::move(waveform.bits));
-}
-
-bool send_min_page_with_settings(uint32_t capcode, uint8_t functionBits, uint32_t preambleMs,
-                                 uint32_t baud, bool invert, bool idleHigh,
-                                 OutputMode outputMode) {
-  uint32_t preambleBits = preambleBitsFromMs(baud, preambleMs);
-  std::vector<uint8_t> nrzBits = buildMinimalNrzBits(encoder, capcode, functionBits, preambleBits);
-  if (nrzBits.empty()) {
+  if (bits.empty()) {
     return false;
   }
-  tx.setOutputMode(outputMode);
-  tx.setInvert(invert);
-  tx.setIdleHigh(idleHigh);
-  tx.setBaud(baud);
-  return tx.sendBits(std::move(nrzBits));
+  beginTxTimer();
+  txBits = bits;
+  txData = txBits.data();
+  txSize = txBits.size();
+  txIndex = 0;
+  txInvert = invert;
+  txIdleHigh = idleHigh;
+  txOutput = outputMode;
+  txGpio = dataGpio;
+  uint32_t periodUs = 1000000UL / baud;
+  timerAlarmWrite(txTimer, periodUs, true);
+  txActive = true;
+  timerAlarmEnable(txTimer);
+  return true;
 }
 
-bool send_min_page(uint32_t capcode, uint8_t functionBits, uint32_t preambleMs) {
-  return send_min_page_with_settings(capcode, functionBits, preambleMs, kDefaultBaud,
-                                     configuredInvert, configuredIdleHigh,
-                                     configuredOutputMode);
+static bool isTxActive() { return txActive; }
+
+static void waitForTxComplete() {
+  while (txActive) {
+    delay(1);
+  }
+  setIdleLine();
 }
 
-String buildStatusLine() {
-  String status = "STATUS CAPCODE=" + String(configuredCapcodeInd) +
-                  " CAPIND=" + String(configuredCapcodeInd) +
-                  " CAPGRP=" + String(configuredCapcodeGrp) +
-                  " BAUD=" + String(configuredBaud) +
-                  " INVERT=" + String(configuredInvert ? 1 : 0) +
-                  " IDLE=" + String(configuredIdleHigh ? 1 : 0) +
-                  " OUTPUT=" +
-                  String(configuredOutputMode == OutputMode::kPushPull ? "PUSH_PULL"
-                                                                       : "OPEN_DRAIN") +
-                  " DATA_GPIO=" + String(configuredDataGpio) +
-                  " RFSENSE_GPIO=" + String(configuredRfSenseGpio) +
-                  " FUNCTION=" + String(configuredDefaultFunction) +
-                  " PREAMBLE_MS=" + String(configuredDefaultPreambleMs) +
-                  (configuredGpioList.length() > 0
-                       ? " GPIO_LIST=" + configuredGpioList
-                       : "") +
-                  " ALERT_GPIO=" + String(kAlertGpio) +
-                  " AUTOPROBE=" + String(configuredAutoProbe ? 1 : 0) +
-                  " PAGES=" + String(pageStore.size());
-  return status;
+static String readFileToString(const char *path) {
+  File file = LittleFS.open(path, "r");
+  if (!file) {
+    return String();
+  }
+  String content = file.readString();
+  file.close();
+  return content;
 }
 
-bool parseUint32(const String &value, uint32_t &out) {
-  if (value.length() == 0) {
+static bool extractJsonValue(const String &json, const char *key, String &out) {
+  String needle = String('"') + key + '"';
+  int keyPos = json.indexOf(needle);
+  if (keyPos < 0) {
     return false;
   }
-  for (size_t i = 0; i < value.length(); ++i) {
-    if (!isdigit(static_cast<unsigned char>(value[i]))) {
+  int colon = json.indexOf(':', keyPos + needle.length());
+  if (colon < 0) {
+    return false;
+  }
+  int start = colon + 1;
+  while (start < json.length() && isspace(static_cast<unsigned char>(json[start]))) {
+    ++start;
+  }
+  if (start >= json.length()) {
+    return false;
+  }
+  if (json[start] == '"') {
+    int end = json.indexOf('"', start + 1);
+    if (end < 0) {
       return false;
     }
+    out = json.substring(start + 1, end);
+    return true;
   }
-  out = value.toInt();
+  int end = start;
+  while (end < json.length() && json[end] != ',' && json[end] != '}' &&
+         json[end] != '\n' && json[end] != '\r') {
+    ++end;
+  }
+  out = json.substring(start, end);
+  out.trim();
   return true;
 }
 
-bool parseFunctionBits(const String &value, uint8_t &out) {
-  uint32_t parsed = 0;
-  if (!parseUint32(value, parsed) || parsed > 3) {
-    return false;
+static bool parseBool(const String &value, bool &out) {
+  String normalized = value;
+  normalized.toLowerCase();
+  if (normalized == "true" || normalized == "1" || normalized == "yes") {
+    out = true;
+    return true;
   }
-  out = static_cast<uint8_t>(parsed);
-  return true;
+  if (normalized == "false" || normalized == "0" || normalized == "no") {
+    out = false;
+    return true;
+  }
+  return false;
 }
 
-bool isValidRate(uint32_t rate) { return rate == 512 || rate == 1200 || rate == 2400; }
-
-std::vector<int> parseGpioList(const String &value) {
-  std::vector<int> pins;
-  int start = 0;
-  while (start < value.length()) {
-    int comma = value.indexOf(',', start);
-    if (comma < 0) {
-      comma = value.length();
-    }
-    String token = value.substring(start, comma);
-    token.trim();
-    if (token.length() > 0) {
-      uint32_t pin = 0;
-      if (parseUint32(token, pin)) {
-        pins.push_back(static_cast<int>(pin));
-      }
-    }
-    start = comma + 1;
+static bool parseOutputMode(const String &value, OutputMode &out) {
+  String normalized = value;
+  normalized.toLowerCase();
+  if (normalized == "open_drain") {
+    out = OutputMode::kOpenDrain;
+    return true;
   }
-  return pins;
+  if (normalized == "push_pull") {
+    out = OutputMode::kPushPull;
+    return true;
+  }
+  return false;
 }
 
-String normalizeGpioList(const std::vector<int> &pins) {
+static void applyRfSenseConfig() {
+  if (config.rfSenseGpio < 0) {
+    return;
+  }
+  pinMode(config.rfSenseGpio, INPUT);
+}
+
+static void IRAM_ATTR onRfSense() {
+  uint32_t now = millis();
+  rfSenseCount++;
+  if (rfSenseLastMs > 0) {
+    rfSensePeriodTotal += (now - rfSenseLastMs);
+    rfSensePeriodCount++;
+  }
+  rfSenseLastMs = now;
+}
+
+static void attachRfSense() {
+  if (config.rfSenseGpio < 0) {
+    return;
+  }
+  detachInterrupt(config.rfSenseGpio);
+  pinMode(config.rfSenseGpio, INPUT);
+  attachInterrupt(config.rfSenseGpio, &onRfSense, RISING);
+}
+
+static void detachRfSenseIfNeeded(int oldGpio) {
+  if (oldGpio >= 0 && oldGpio != config.rfSenseGpio) {
+    detachInterrupt(oldGpio);
+  }
+}
+
+static void applyConfigPins() {
+  txInvert = config.invert;
+  txIdleHigh = config.idleHigh;
+  txOutput = config.output;
+  txGpio = config.dataGpio;
+  setIdleLine();
+  applyRfSenseConfig();
+}
+
+static void writeConfigFile() {
+  File file = LittleFS.open(kConfigPath, "w");
+  if (!file) {
+    Serial.println("ERR: failed to open config for write");
+    return;
+  }
+  String outputMode = (config.output == OutputMode::kOpenDrain) ? "open_drain" : "push_pull";
+  file.println("{");
+  file.printf("  \"baud\": %u,\n", config.baud);
+  file.printf("  \"invert\": %s,\n", config.invert ? "true" : "false");
+  file.printf("  \"idleHigh\": %s,\n", config.idleHigh ? "true" : "false");
+  file.printf("  \"output\": \"%s\",\n", outputMode.c_str());
+  file.printf("  \"preambleMs\": %u,\n", config.preambleMs);
+  file.printf("  \"capInd\": %u,\n", config.capInd);
+  file.printf("  \"capGrp\": %u,\n", config.capGrp);
+  file.printf("  \"functionBits\": %u,\n", config.functionBits);
+  file.printf("  \"dataGpio\": %d,\n", config.dataGpio);
+  file.printf("  \"rfSenseGpio\": %d\n", config.rfSenseGpio);
+  file.println("}");
+  file.close();
+}
+
+static void loadConfig() {
+  config = Config();
+  if (!LittleFS.begin(true)) {
+    Serial.println("ERR: LittleFS mount failed");
+    return;
+  }
+  if (!LittleFS.exists(kConfigPath)) {
+    writeConfigFile();
+    return;
+  }
+  String json = readFileToString(kConfigPath);
   String value;
-  for (size_t i = 0; i < pins.size(); ++i) {
-    if (i > 0) {
-      value += ",";
+
+  if (extractJsonValue(json, "baud", value)) {
+    uint32_t baud = static_cast<uint32_t>(value.toInt());
+    if (baud == 512 || baud == 1200 || baud == 2400) {
+      config.baud = baud;
     }
-    value += String(pins[i]);
   }
-  return value;
+  if (extractJsonValue(json, "invert", value)) {
+    parseBool(value, config.invert);
+  }
+  if (extractJsonValue(json, "idleHigh", value)) {
+    parseBool(value, config.idleHigh);
+  }
+  if (extractJsonValue(json, "output", value)) {
+    parseOutputMode(value, config.output);
+  }
+  if (extractJsonValue(json, "preambleMs", value)) {
+    config.preambleMs = static_cast<uint32_t>(value.toInt());
+  }
+  if (extractJsonValue(json, "capInd", value)) {
+    config.capInd = static_cast<uint32_t>(value.toInt());
+  }
+  if (extractJsonValue(json, "capGrp", value)) {
+    config.capGrp = static_cast<uint32_t>(value.toInt());
+  }
+  if (extractJsonValue(json, "functionBits", value)) {
+    config.functionBits = static_cast<uint8_t>(value.toInt() & 0x3);
+  }
+  if (extractJsonValue(json, "dataGpio", value)) {
+    config.dataGpio = value.toInt();
+  }
+  if (extractJsonValue(json, "rfSenseGpio", value)) {
+    config.rfSenseGpio = value.toInt();
+  }
 }
 
-void handleCommand(const std::vector<String> &tokens) {
-  if (tokens.empty()) {
+static void printStatus() {
+  String outputMode = (config.output == OutputMode::kOpenDrain) ? "open_drain" : "push_pull";
+  Serial.printf(
+      "baud=%u invert=%s idleHigh=%s output=%s preambleMs=%u capInd=%u capGrp=%u "
+      "functionBits=%u dataGpio=%d rfSenseGpio=%d\n",
+      config.baud, config.invert ? "true" : "false", config.idleHigh ? "true" : "false",
+      outputMode.c_str(), config.preambleMs, config.capInd, config.capGrp, config.functionBits,
+      config.dataGpio, config.rfSenseGpio);
+}
+
+static std::vector<uint8_t> buildAlternatingBits(uint32_t durationMs, uint32_t baud) {
+  uint32_t bitCount = (durationMs * baud) / 1000;
+  if (bitCount == 0) {
+    bitCount = 1;
+  }
+  std::vector<uint8_t> bits;
+  bits.reserve(bitCount);
+  for (uint32_t i = 0; i < bitCount; ++i) {
+    bits.push_back(static_cast<uint8_t>(i % 2 == 0));
+  }
+  return bits;
+}
+
+static void sendMessageOnce(const String &message, uint32_t capcode) {
+  std::vector<uint8_t> bits =
+      encoder.buildBitstream(capcode, config.functionBits, message, config.preambleMs, config.baud);
+  if (!startTx(bits, config.baud, config.invert, config.idleHigh, config.output,
+               config.dataGpio)) {
+    Serial.println("BUSY");
     return;
   }
-  std::vector<String> normalized = tokens;
-  auto splitAssignment = [](const String &token, String &key, String &value) {
-    int eq = token.indexOf('=');
-    if (eq <= 0) {
-      return false;
+  waitForTxComplete();
+}
+
+static void handleScope(uint32_t durationMs) {
+  std::vector<uint8_t> bits = buildAlternatingBits(durationMs, config.baud);
+  if (!startTx(bits, config.baud, config.invert, config.idleHigh, config.output,
+               config.dataGpio)) {
+    Serial.println("BUSY");
+    return;
+  }
+  waitForTxComplete();
+}
+
+static void runTestLoop(uint32_t seconds) {
+  uint32_t start = millis();
+  uint32_t next = start;
+  while ((millis() - start) < (seconds * 1000UL)) {
+    if (!isTxActive()) {
+      sendMessageOnce("HELLO WORLD", config.capInd);
     }
-    key = token.substring(0, eq);
-    value = token.substring(eq + 1);
-    return value.length() > 0;
-  };
-  String cmd = normalized[0];
+    next += kDefaultIntervalMs;
+    uint32_t now = millis();
+    if (next > now) {
+      delay(next - now);
+    }
+  }
+}
+
+static void printRfSense() {
+  uint32_t count = rfSenseCount;
+  uint32_t lastMs = rfSenseLastMs;
+  uint64_t totalPeriod = rfSensePeriodTotal;
+  uint32_t periodCount = rfSensePeriodCount;
+  uint32_t lastSeenAgo = (lastMs == 0) ? 0 : (millis() - lastMs);
+  float avgPeriod = periodCount == 0 ? 0.0f : static_cast<float>(totalPeriod) / periodCount;
+  Serial.printf("count=%u lastSeenMsAgo=%u avgPeriodMs=%.2f\n", count, lastSeenAgo, avgPeriod);
+}
+
+static void applySetCommand(const String &key, const String &value) {
+  String normalizedKey = key;
+  normalizedKey.toLowerCase();
+  int oldRfSense = config.rfSenseGpio;
+
+  if (normalizedKey == "baud") {
+    uint32_t baud = static_cast<uint32_t>(value.toInt());
+    if (baud == 512 || baud == 1200 || baud == 2400) {
+      config.baud = baud;
+    }
+  } else if (normalizedKey == "invert") {
+    parseBool(value, config.invert);
+  } else if (normalizedKey == "idlehigh") {
+    parseBool(value, config.idleHigh);
+  } else if (normalizedKey == "output") {
+    parseOutputMode(value, config.output);
+  } else if (normalizedKey == "preamblems") {
+    config.preambleMs = static_cast<uint32_t>(value.toInt());
+  } else if (normalizedKey == "capind") {
+    config.capInd = static_cast<uint32_t>(value.toInt());
+  } else if (normalizedKey == "capgrp") {
+    config.capGrp = static_cast<uint32_t>(value.toInt());
+  } else if (normalizedKey == "functionbits") {
+    config.functionBits = static_cast<uint8_t>(value.toInt() & 0x3);
+  } else if (normalizedKey == "datagpio") {
+    config.dataGpio = value.toInt();
+  } else if (normalizedKey == "rfsensegpio") {
+    config.rfSenseGpio = value.toInt();
+  } else {
+    Serial.println("ERR: unknown key");
+    return;
+  }
+
+  detachRfSenseIfNeeded(oldRfSense);
+  attachRfSense();
+  applyConfigPins();
+  Serial.println("OK");
+}
+
+static void handleCommand(const String &line) {
+  String trimmed = line;
+  trimmed.trim();
+  if (trimmed.length() == 0) {
+    return;
+  }
+  int space = trimmed.indexOf(' ');
+  String cmd = (space < 0) ? trimmed : trimmed.substring(0, space);
   cmd.toUpperCase();
-  String assignedKey;
-  String assignedValue;
-  if (cmd == "SET" && normalized.size() >= 2 &&
-      splitAssignment(normalized[1], assignedKey, assignedValue)) {
-    normalized[1] = assignedKey;
-    normalized.insert(normalized.begin() + 2, assignedValue);
-  } else if (splitAssignment(cmd, assignedKey, assignedValue)) {
-    normalized.clear();
-    normalized.push_back("SET");
-    normalized.push_back(assignedKey);
-    normalized.push_back(assignedValue);
-  } else if (cmd == "INVERT" || cmd == "IDLE" || cmd == "BAUD" || cmd == "OUTPUT" ||
-             cmd == "CAPCODE" || cmd == "CAPIND" || cmd == "CAPGRP" || cmd == "CAPS" ||
-             cmd == "AUTOPROBE") {
-    normalized.insert(normalized.begin(), "SET");
-  }
-  if (normalized != tokens) {
-    handleCommand(normalized);
-    return;
-  }
-  cmd = tokens[0];
-  cmd.toUpperCase();
-  if (cmd == "SET_RATE" && tokens.size() >= 2) {
-    uint32_t rate = tokens[1].toInt();
-    if (!isValidRate(rate)) {
-      queueStatus("ERROR RATE INVALID");
-      return;
-    }
-    configuredBaud = rate;
-    tx.setBaud(configuredBaud);
-    saveSettings();
-    queueStatus("STATUS BAUD=" + String(configuredBaud));
-    return;
-  }
-  if (cmd == "SET_INVERT" && tokens.size() >= 2) {
-    configuredInvert = tokens[1].toInt() != 0;
-    tx.setInvert(configuredInvert);
-    saveSettings();
-    queueStatus("STATUS INVERT=" + String(configuredInvert ? 1 : 0));
-    return;
-  }
-  if (cmd == "SET_IDLE" && tokens.size() >= 2) {
-    configuredIdleHigh = tokens[1].toInt() != 0;
-    tx.setIdleHigh(configuredIdleHigh);
-    saveSettings();
-    queueStatus("STATUS IDLE=" + String(configuredIdleHigh ? 1 : 0));
-    return;
-  }
-  if (cmd == "SET_MODE" && tokens.size() >= 2) {
-    String value = tokens[1];
-    value.toUpperCase();
-    if (value == "OPENDRAIN" || value == "OPEN_DRAIN" || value == "OPEN_COLLECTOR") {
-      configuredOutputMode = OutputMode::kOpenDrain;
-    } else if (value == "PUSHPULL" || value == "PUSH_PULL") {
-      configuredOutputMode = OutputMode::kPushPull;
-    } else {
-      queueStatus("ERROR MODE INVALID");
-      return;
-    }
-    tx.setOutputMode(configuredOutputMode);
-    saveSettings();
-    queueStatus("STATUS OUTPUT=" +
-                String(configuredOutputMode == OutputMode::kPushPull ? "PUSH_PULL"
-                                                                    : "OPEN_DRAIN"));
-    return;
-  }
-  if (cmd == "SET_GPIO" && tokens.size() >= 2) {
-    uint32_t pin = 0;
-    if (!parseUint32(tokens[1], pin)) {
-      queueStatus("ERROR GPIO INVALID");
-      return;
-    }
-    if (tx.isBusy()) {
-      queueStatus("ERROR GPIO BUSY");
-      return;
-    }
-    configuredDataGpio = static_cast<int>(pin);
-    tx.begin(configuredDataGpio, configuredInvert, configuredBaud, configuredOutputMode,
-             configuredIdleHigh);
-    saveSettings();
-    queueStatus(buildStatusLine());
-    return;
-  }
-  if (cmd == "SET_GPIO_LIST" && tokens.size() >= 2) {
-    String listValue = tokens[1];
-    for (size_t i = 2; i < tokens.size(); ++i) {
-      listValue += tokens[i];
-    }
-    std::vector<int> pins = parseGpioList(listValue);
-    if (pins.empty()) {
-      queueStatus("ERROR GPIO_LIST INVALID");
-      return;
-    }
-    configuredGpioList = normalizeGpioList(pins);
-    saveSettings();
-    queueStatus("STATUS GPIO_LIST=" + configuredGpioList);
-    return;
-  }
-  if (cmd == "RFSENSE" && tokens.size() >= 2) {
-    String mode = tokens[1];
-    mode.toUpperCase();
-    if (mode == "STATUS") {
-      if (configuredRfSenseGpio < 0) {
-        queueStatus("RFSENSE disabled");
-        return;
-      }
-      resetRfSenseWindow();
-      uint32_t startMs = millis();
-      while (millis() - startMs < 2000) {
-        updateRfSensePulseWidth();
-        delay(1);
-      }
-      updateRfSensePulseWidth();
-      stopRfSenseWindow();
-      uint32_t pulseCount = 0;
-      uint32_t minWidthUs = 0;
-      uint32_t maxWidthUs = 0;
-      uint32_t periodCount = 0;
-      uint64_t periodSumUs = 0;
-      uint32_t lastPulseMs = 0;
-      portENTER_CRITICAL(&rfSenseMux);
-      pulseCount = rfSenseWindowPulseCount;
-      minWidthUs = rfSenseWindowMinWidthUs;
-      maxWidthUs = rfSenseWindowMaxWidthUs;
-      periodCount = rfSenseWindowPeriodCount;
-      periodSumUs = rfSenseWindowPeriodSumUs;
-      lastPulseMs = rfSenseLastPulseMs;
-      portEXIT_CRITICAL(&rfSenseMux);
-      float avgPeriodMs =
-          periodCount > 0 ? static_cast<float>(periodSumUs) / periodCount / 1000.0f : 0.0f;
-      bool pagerAlive =
-          lastPulseMs > 0 && (millis() - lastPulseMs) <= 10000;
-      queueStatus("RFSENSE count=" + String(pulseCount) +
-                  " min_high_us=" + String(minWidthUs) +
-                  " max_high_us=" + String(maxWidthUs) +
-                  " avg_period_ms=" + String(avgPeriodMs, 2) +
-                  " pager_alive=" + String(pagerAlive ? 1 : 0));
-      return;
-    }
-  }
-  if (cmd == "SEND_TEST") {
-    std::vector<uint8_t> bits = buildTestPattern(configuredCapcodeInd, 0, "TEST");
-    enqueueRawBits(std::move(bits), "TEST_PATTERN");
-    queueStatus("STATUS TEST QUEUED");
-    return;
-  }
-  if (cmd == "DEBUG_SCOPE") {
-    if (tx.isBusy()) {
-      queueStatus("ERROR DEBUG_SCOPE TX_BUSY");
-      return;
-    }
-    std::vector<uint8_t> bits = buildAlternatingBitsForBaud(2000, kDefaultBaud);
-    tx.setOutputMode(configuredOutputMode);
-    tx.setInvert(configuredInvert);
-    tx.setIdleHigh(configuredIdleHigh);
-    debugScopeRestoreBaud = configuredBaud;
-    tx.setBaud(kDefaultBaud);
-    if (!tx.sendBits(std::move(bits))) {
-      queueStatus("ERROR DEBUG_SCOPE TX_BUSY");
-      return;
-    }
-    pendingDebugScope = true;
-    queueStatus("STATUS DEBUG_SCOPE START");
-    return;
-  }
-  if (cmd == "SEND_MIN" && tokens.size() >= 3) {
-    uint32_t capcode = 0;
-    uint8_t functionBits = 0;
-    uint32_t preambleMs = configuredDefaultPreambleMs;
-    if (!parseUint32(tokens[1], capcode) || !parseFunctionBits(tokens[2], functionBits)) {
-      queueStatus("ERROR SEND_MIN INVALID");
-      return;
-    }
-    if (tokens.size() >= 4) {
-      if (!parseUint32(tokens[3], preambleMs) || preambleMs == 0) {
-        queueStatus("ERROR SEND_MIN PREAMBLE");
-        return;
-      }
-    }
-    if (tx.isBusy()) {
-      queueStatus("ERROR SEND_MIN TX_BUSY");
-      return;
-    }
-    configuredDefaultFunction = functionBits;
-    configuredDefaultPreambleMs = preambleMs;
-    if (!send_min_page(capcode, functionBits, preambleMs)) {
-      queueStatus("ERROR SEND_MIN TX_BUSY");
-      return;
-    }
-    queueStatus("STATUS MIN START capcode=" + String(capcode) +
-                " func=" + String(functionBits) + " preamble=" + String(preambleMs) + "ms");
-    return;
-  }
-  if (cmd == "SEND_MIN_LOOP" && tokens.size() >= 4) {
-    uint32_t capcode = 0;
-    uint8_t functionBits = 0;
-    uint32_t preambleMs = configuredDefaultPreambleMs;
-    uint32_t durationSeconds = 0;
-    if (!parseUint32(tokens[1], capcode) || !parseFunctionBits(tokens[2], functionBits)) {
-      queueStatus("ERROR SEND_MIN_LOOP INVALID");
-      return;
-    }
-    if (tokens.size() >= 5) {
-      if (!parseUint32(tokens[3], preambleMs) || preambleMs == 0 ||
-          !parseUint32(tokens[4], durationSeconds) || durationSeconds == 0) {
-        queueStatus("ERROR SEND_MIN_LOOP INVALID");
-        return;
-      }
-    } else {
-      if (!parseUint32(tokens[3], durationSeconds) || durationSeconds == 0) {
-        queueStatus("ERROR SEND_MIN_LOOP INVALID");
-        return;
-      }
-    }
-    if (preambleMs == 0) {
-      queueStatus("ERROR SEND_MIN_LOOP INVALID");
-      return;
-    }
-    if (autotest.isActive() || autotest2.isActive() || autotestFast.isActive()) {
-      queueStatus("ERROR SEND_MIN_LOOP BUSY");
-      return;
-    }
-    if (minLoop.isActive()) {
-      queueStatus("ERROR SEND_MIN_LOOP BUSY");
-      return;
-    }
-    if (tx.isBusy()) {
-      queueStatus("ERROR SEND_MIN_LOOP TX_BUSY");
-      return;
-    }
-    if (probe.isActive()) {
-      probe.stop();
-    }
-    configuredDefaultFunction = functionBits;
-    configuredDefaultPreambleMs = preambleMs;
-    minLoop.start(capcode, functionBits, preambleMs, durationSeconds);
-    queueStatus("STATUS SEND_MIN_LOOP START capcode=" + String(capcode) +
-                " func=" + String(functionBits) + " preamble=" + String(preambleMs) + "ms");
-    return;
-  }
-  if (cmd == "SEND_SYNC") {
-    std::vector<uint32_t> codewords = {kSyncWord, kIdleWord, kIdleWord};
-    std::vector<uint8_t> bits = encoder.buildBitstreamFromCodewords(codewords, true);
-    enqueueRawBits(std::move(bits), "SYNC_ONLY");
-    queueStatus("STATUS SYNC QUEUED");
-    return;
-  }
-  if (cmd == "AUTOTEST" && tokens.size() >= 2) {
-    String value = tokens[1];
-    value.toUpperCase();
-    if (value == "STOP") {
-      if (!autotest.isActive()) {
-        queueStatus("ERROR AUTOTEST NOT_ACTIVE");
-        return;
-      }
-      autotest.requestStop();
-      if (!tx.isBusy()) {
-        autotest.update();
-      }
-      return;
-    }
-    uint32_t capcode = 0;
-    if (!parseUint32(tokens[1], capcode)) {
-      queueStatus("ERROR AUTOTEST INVALID");
-      return;
-    }
-    uint32_t durationSeconds = 60;
-    if (tokens.size() >= 3) {
-      if (!parseUint32(tokens[2], durationSeconds) || durationSeconds == 0) {
-        queueStatus("ERROR AUTOTEST DURATION");
-        return;
-      }
-    }
-    if (autotest.isActive()) {
-      queueStatus("ERROR AUTOTEST BUSY");
-      return;
-    }
-    if (tx.isBusy()) {
-      queueStatus("ERROR AUTOTEST TX_BUSY");
-      return;
-    }
-    if (probe.isActive()) {
-      probe.stop();
-    }
-    autotest.start(capcode, durationSeconds, configuredBaud, configuredInvert,
-                   configuredIdleHigh);
-    queueStatus("STATUS AUTOTEST START");
-    return;
-  }
-  if (cmd == "AUTOTEST_FAST" && tokens.size() >= 2) {
-    String value = tokens[1];
-    value.toUpperCase();
-    if (value == "STOP") {
-      if (!autotestFast.isActive()) {
-        queueStatus("ERROR AUTOTEST_FAST NOT_ACTIVE");
-        return;
-      }
-      autotestFast.requestStop();
-      if (!tx.isBusy()) {
-        autotestFast.update();
-      }
-      return;
-    }
-    uint32_t durationSeconds = 60;
-    if (!parseUint32(tokens[1], durationSeconds) || durationSeconds == 0) {
-      queueStatus("ERROR AUTOTEST_FAST DURATION");
-      return;
-    }
-    if (autotestFast.isActive() || autotest.isActive() || autotest2.isActive() ||
-        minLoop.isActive()) {
-      queueStatus("ERROR AUTOTEST_FAST BUSY");
-      return;
-    }
-    if (tx.isBusy()) {
-      queueStatus("ERROR AUTOTEST_FAST TX_BUSY");
-      return;
-    }
-    if (probe.isActive()) {
-      probe.stop();
-    }
-    autotestFast.start(durationSeconds, configuredBaud, configuredInvert, configuredIdleHigh,
-                       configuredOutputMode);
-    queueStatus("STATUS AUTOTEST_FAST START capcode=" + String(kDefaultCapcodeInd) +
-                " baud=512 output=OPEN_DRAIN");
-    return;
-  }
-  if (cmd == "AUTOTEST2" && tokens.size() >= 2) {
-    String value = tokens[1];
-    value.toUpperCase();
-    if (value == "STOP") {
-      if (!autotest2.isActive()) {
-        queueStatus("ERROR AUTOTEST2 NOT_ACTIVE");
-        return;
-      }
-      autotest2.requestStop();
-      if (!tx.isBusy()) {
-        autotest2.update();
-      }
-      return;
-    }
-    uint32_t capcode = 0;
-    if (!parseUint32(tokens[1], capcode)) {
-      queueStatus("ERROR AUTOTEST2 INVALID");
-      return;
-    }
-    uint32_t durationSeconds = 60;
-    if (tokens.size() >= 3) {
-      if (!parseUint32(tokens[2], durationSeconds) || durationSeconds == 0) {
-        queueStatus("ERROR AUTOTEST2 DURATION");
-        return;
-      }
-    }
-    if (autotest2.isActive()) {
-      queueStatus("ERROR AUTOTEST2 BUSY");
-      return;
-    }
-    if (autotest.isActive()) {
-      queueStatus("ERROR AUTOTEST BUSY");
-      return;
-    }
-    if (tx.isBusy()) {
-      queueStatus("ERROR AUTOTEST2 TX_BUSY");
-      return;
-    }
-    if (probe.isActive()) {
-      probe.stop();
-    }
-    autotest2.start(capcode, durationSeconds, configuredBaud, configuredInvert, configuredIdleHigh,
-                    configuredOutputMode, configuredDataGpio, configuredGpioList);
-    queueStatus("STATUS AUTOTEST2 START");
-    return;
-  }
-  if (cmd == "SEND_ADDR" && tokens.size() >= 3) {
-    uint32_t capcode = 0;
-    uint8_t functionBits = 0;
-    if (!parseUint32(tokens[1], capcode) || !parseFunctionBits(tokens[2], functionBits)) {
-      queueStatus("ERROR SEND_ADDR INVALID");
-      return;
-    }
-    std::vector<uint8_t> bits = encoder.buildSingleBatchAddressOnly(capcode, functionBits);
-    enqueueRawBits(std::move(bits), "ADDR_ONLY");
-    queueStatus("STATUS ADDR QUEUED");
-    return;
-  }
-  if (cmd == "SEND_MSG" && tokens.size() >= 4) {
-    uint32_t capcode = 0;
-    uint8_t functionBits = 0;
-    if (!parseUint32(tokens[1], capcode) || !parseFunctionBits(tokens[2], functionBits)) {
-      queueStatus("ERROR SEND_MSG INVALID");
-      return;
-    }
-    String message;
-    for (size_t i = 3; i < tokens.size(); ++i) {
-      if (i > 3) {
-        message += " ";
-      }
-      message += tokens[i];
-    }
-    std::vector<uint8_t> bits = encoder.buildSingleBatch(capcode, functionBits, message);
-    enqueueRawBits(std::move(bits), "MSG_SINGLE");
-    queueStatus("STATUS MSG QUEUED");
-    return;
-  }
-  if (cmd == "SEND_CODEWORDS" && tokens.size() >= 2) {
-    std::vector<uint32_t> codewords;
-    codewords.reserve(tokens.size() - 1);
-    for (size_t i = 1; i < tokens.size(); ++i) {
-      uint32_t value = static_cast<uint32_t>(strtoul(tokens[i].c_str(), nullptr, 0));
-      codewords.push_back(value);
-    }
-    std::vector<uint8_t> bits = encoder.buildBitstreamFromCodewords(codewords, true);
-    enqueueRawBits(std::move(bits), "CODEWORDS");
-    queueStatus("STATUS CODEWORDS QUEUED");
-    return;
-  }
-  if (cmd == "ORIGINAL_ADVISOR_TEST") {
-    if (originalAdvisor.isActive()) {
-      queueStatus("ERROR ORIGINAL_ADVISOR_TEST BUSY");
-      return;
-    }
-    if (autotest.isActive() || autotest2.isActive() || autotestFast.isActive() ||
-        minLoop.isActive()) {
-      queueStatus("ERROR ORIGINAL_ADVISOR_TEST BUSY");
-      return;
-    }
-    if (tx.isBusy()) {
-      queueStatus("ERROR ORIGINAL_ADVISOR_TEST TX_BUSY");
-      return;
-    }
-    if (probe.isActive()) {
-      probe.stop();
-    }
-    originalAdvisor.start();
-    return;
-  }
-  if (cmd == "ORIGINAL_ADVISOR_HELP") {
-    queueStatus("Inject on pager header pin 4 / LIM DATA node; use open-drain; "
-                "try invert 0/1; optional monitor on header pin 7.");
-    return;
-  }
-  if (cmd == "SET" && tokens.size() >= 3) {
-    String key = tokens[1];
-    key.toUpperCase();
-    if (key == "CAPCODE") {
-      configuredCapcodeInd = tokens[2].toInt();
-      if (!capGrpWasExplicitlySet) {
-        configuredCapcodeGrp = configuredCapcodeInd + 1;
-      }
-      saveSettings();
-      queueStatus("STATUS CAPS CAPIND=" + String(configuredCapcodeInd) +
-                  " CAPGRP=" + String(configuredCapcodeGrp));
-      return;
-    }
-    if (key == "CAPIND") {
-      configuredCapcodeInd = tokens[2].toInt();
-      saveSettings();
-      queueStatus("STATUS CAPIND=" + String(configuredCapcodeInd));
-      return;
-    }
-    if (key == "CAPGRP") {
-      configuredCapcodeGrp = tokens[2].toInt();
-      capGrpWasExplicitlySet = true;
-      saveSettings();
-      queueStatus("STATUS CAPGRP=" + String(configuredCapcodeGrp));
-      return;
-    }
-    if (key == "CAPS" && tokens.size() >= 4) {
-      configuredCapcodeInd = tokens[2].toInt();
-      configuredCapcodeGrp = tokens[3].toInt();
-      capGrpWasExplicitlySet = true;
-      saveSettings();
-      queueStatus("STATUS CAPS CAPIND=" + String(configuredCapcodeInd) +
-                  " CAPGRP=" + String(configuredCapcodeGrp));
-      return;
-    }
-    if (key == "BAUD") {
-      uint32_t rate = tokens[2].toInt();
-      if (!isValidRate(rate)) {
-        queueStatus("ERROR BAUD INVALID");
-        return;
-      }
-      configuredBaud = rate;
-      tx.setBaud(configuredBaud);
-      saveSettings();
-      queueStatus("STATUS BAUD=" + String(configuredBaud));
-      return;
-    }
-    if (key == "INVERT") {
-      configuredInvert = tokens[2].toInt() != 0;
-      tx.setInvert(configuredInvert);
-      saveSettings();
-      queueStatus("STATUS INVERT=" + String(configuredInvert ? 1 : 0));
-      return;
-    }
-    if (key == "IDLE" && tokens.size() >= 3) {
-      configuredIdleHigh = tokens[2].toInt() != 0;
-      tx.setIdleHigh(configuredIdleHigh);
-      saveSettings();
-      queueStatus("STATUS IDLE=" + String(configuredIdleHigh ? 1 : 0));
-      return;
-    }
-    if (key == "OUTPUT") {
-      String value = tokens[2];
-      value.toUpperCase();
-      if (value == "OPEN_DRAIN" || value == "OPEN_COLLECTOR") {
-        configuredOutputMode = OutputMode::kOpenDrain;
-      } else if (value == "PUSH_PULL") {
-        configuredOutputMode = OutputMode::kPushPull;
-      } else {
-        queueStatus("ERROR OUTPUT INVALID");
-        return;
-      }
-      tx.setOutputMode(configuredOutputMode);
-      saveSettings();
-      queueStatus("STATUS OUTPUT=" +
-                  String(configuredOutputMode == OutputMode::kPushPull ? "PUSH_PULL"
-                                                                      : "OPEN_DRAIN"));
-      return;
-    }
-    if (key == "RFSENSE") {
-      int pin = -1;
-      if (tokens[2] == "-1") {
-        pin = -1;
-      } else {
-        uint32_t parsed = 0;
-        if (!parseUint32(tokens[2], parsed)) {
-          queueStatus("ERROR RFSENSE INVALID");
-          return;
-        }
-        pin = static_cast<int>(parsed);
-      }
-      configureRfSenseGpio(pin);
-      saveSettings();
-      queueStatus("STATUS RFSENSE_GPIO=" + String(configuredRfSenseGpio));
-      return;
-    }
-    if (key == "AUTOPROBE") {
-      configuredAutoProbe = tokens[2].toInt() != 0;
-      saveSettings();
-      queueStatus("STATUS AUTOPROBE=" + String(configuredAutoProbe ? 1 : 0));
-      return;
-    }
-  }
-
-  if (cmd == "PAGE" && tokens.size() >= 2) {
-    auto isNumber = [](const String &value) {
-      if (value.length() == 0) {
-        return false;
-      }
-      for (size_t i = 0; i < value.length(); ++i) {
-        if (!isdigit(static_cast<unsigned char>(value[i]))) {
-          return false;
-        }
-      }
-      return true;
-    };
-    if (tokens.size() >= 3 && isNumber(tokens[1])) {
-      uint32_t capcode = tokens[1].toInt();
-      String message;
-      for (size_t i = 2; i < tokens.size(); ++i) {
-        if (i > 2) {
-          message += " ";
-        }
-        message += tokens[i];
-      }
-      enqueuePage(capcode, message, true);
-      queueStatus("STATUS PAGE QUEUED");
-      return;
-    }
-    String message;
-    for (size_t i = 1; i < tokens.size(); ++i) {
-      if (i > 1) {
-        message += " ";
-      }
-      message += tokens[i];
-    }
-    enqueuePage(configuredCapcodeInd, message, true);
-    queueStatus("STATUS PAGE QUEUED");
-    return;
-  }
-
-  if (cmd == "PAGEI" && tokens.size() >= 2) {
-    String message;
-    for (size_t i = 1; i < tokens.size(); ++i) {
-      if (i > 1) {
-        message += " ";
-      }
-      message += tokens[i];
-    }
-    enqueuePage(configuredCapcodeInd, message, true);
-    queueStatus("STATUS PAGE QUEUED");
-    return;
-  }
-
-  if (cmd == "PAGEG" && tokens.size() >= 2) {
-    String message;
-    for (size_t i = 1; i < tokens.size(); ++i) {
-      if (i > 1) {
-        message += " ";
-      }
-      message += tokens[i];
-    }
-    enqueuePage(configuredCapcodeGrp, message, true);
-    queueStatus("STATUS PAGE QUEUED");
-    return;
-  }
-
-  if (cmd == "TEST" && tokens.size() >= 3) {
-    String mode = tokens[1];
-    mode.toUpperCase();
-    if (mode == "CARRIER") {
-      uint32_t durationMs = tokens[2].toInt();
-      if (durationMs == 0) {
-        queueStatus("ERROR TEST DURATION");
-        return;
-      }
-      enqueueCarrier(durationMs);
-      queueStatus("STATUS TEST CARRIER QUEUED");
-      return;
-    }
-  }
-
-  if (cmd == "LIST") {
-    for (const auto &line : pageStore.listSummary()) {
-      queueStatus(line);
-    }
-    return;
-  }
-
-  if (cmd == "RESEND" && tokens.size() >= 2) {
-    PageRecord record;
-    size_t index = tokens[1].toInt();
-    if (pageStore.getByIndex(index, record)) {
-      enqueuePage(record.capcode, record.message, false);
-      queueStatus("STATUS RESEND QUEUED");
-    } else {
-      queueStatus("ERROR RESEND BAD_INDEX");
-    }
-    return;
-  }
 
   if (cmd == "STATUS") {
-    queueStatus(buildStatusLine());
+    printStatus();
     return;
   }
-
   if (cmd == "SAVE") {
-    saveSettings();
-    queueStatus("STATUS SAVED");
+    writeConfigFile();
+    Serial.println("SAVED");
     return;
   }
-
-  if (cmd == "CLEAR") {
-    pageStore.clear();
-    saveSettings();
-    queueStatus("STATUS CLEARED");
+  if (cmd == "LOAD") {
+    loadConfig();
+    applyConfigPins();
+    attachRfSense();
+    Serial.println("LOADED");
     return;
   }
-
-  if (cmd == "PROBE" && tokens.size() >= 2) {
-    String mode = tokens[1];
-    mode.toUpperCase();
-    if (mode == "STOP") {
-      probe.stop();
-      queueStatus("STATUS PROBE STOP");
-      return;
-    }
-    if (mode == "START" && tokens.size() >= 5) {
-      uint32_t startCap = tokens[2].toInt();
-      uint32_t endCap = tokens[3].toInt();
-      uint32_t step = tokens[4].toInt();
-      if (probe.startSequential(startCap, endCap, step)) {
-        queueStatus("STATUS PROBE START");
-      } else {
-        queueStatus("ERROR PROBE NO_ALERT_GPIO");
-      }
-      return;
-    }
-    if (mode == "BINARY" && tokens.size() >= 4) {
-      uint32_t startCap = tokens[2].toInt();
-      uint32_t endCap = tokens[3].toInt();
-      if (probe.startBinary(startCap, endCap)) {
-        queueStatus("STATUS PROBE BINARY");
-      } else {
-        queueStatus("ERROR PROBE NO_ALERT_GPIO");
-      }
-      return;
-    }
-    if (mode == "ONESHOT" && tokens.size() >= 3) {
-      std::vector<uint32_t> caps;
-      for (size_t i = 2; i < tokens.size(); ++i) {
-        uint32_t cap = tokens[i].toInt();
-        if (cap > 0) {
-          caps.push_back(cap);
-        }
-      }
-      if (caps.empty()) {
-        queueStatus("ERROR PROBE ONESHOT EMPTY");
-        return;
-      }
-      probe.startOneshot(caps);
-      queueStatus("STATUS PROBE ONESHOT");
-      return;
-    }
+  if (cmd == "H") {
+    sendMessageOnce("H", config.capInd);
+    return;
   }
-
-  queueStatus("ERROR UNKNOWN_CMD");
+  if (cmd == "RFSENSE") {
+    printRfSense();
+    return;
+  }
+  if (cmd == "SCOPE") {
+    String value = (space < 0) ? "" : trimmed.substring(space + 1);
+    handleScope(static_cast<uint32_t>(value.toInt()));
+    return;
+  }
+  if (cmd == "T1") {
+    String value = (space < 0) ? "" : trimmed.substring(space + 1);
+    runTestLoop(static_cast<uint32_t>(value.toInt()));
+    return;
+  }
+  if (cmd == "SET") {
+    int secondSpace = trimmed.indexOf(' ', space + 1);
+    if (space < 0 || secondSpace < 0) {
+      Serial.println("ERR: SET <key> <value>");
+      return;
+    }
+    String key = trimmed.substring(space + 1, secondSpace);
+    String value = trimmed.substring(secondSpace + 1);
+    applySetCommand(key, value);
+    return;
+  }
+  Serial.println("ERR: unknown command");
 }
-
-class ServerCallbacks final : public NimBLEServerCallbacks {
-  void onConnect(NimBLEServer *server) override {
-    (void)server;
-    Serial.println("BLE connected.");
-  }
-
-  void onDisconnect(NimBLEServer *server) override {
-    (void)server;
-    Serial.println("BLE disconnected.");
-    NimBLEDevice::startAdvertising();
-  }
-};
-
-class RxCallbacks final : public NimBLECharacteristicCallbacks {
-  void onWrite(NimBLECharacteristic *characteristic) override {
-    std::string value = characteristic->getValue();
-    String input(value.c_str());
-    parser.handleInput(input);
-  }
-};
-}  // namespace
 
 void setup() {
   Serial.begin(115200);
-  delay(200);
-  Serial.println("PagerBridge booting...");
-
-  preferences.begin("pager", false);
-  bool hasCapInd = preferences.isKey("cap_ind");
-  bool hasCapGrp = preferences.isKey("cap_grp");
-  bool hasLegacyCap = preferences.isKey("capcode");
-  configuredCapcodeInd = preferences.getUInt("cap_ind", kDefaultCapcodeInd);
-  configuredCapcodeGrp = preferences.getUInt("cap_grp", kDefaultCapcodeGrp);
-  bool migratedLegacy = false;
-  if (hasLegacyCap && !hasCapInd && !hasCapGrp) {
-    uint32_t legacyCapcode = preferences.getUInt("capcode", kDefaultCapcodeInd);
-    configuredCapcodeInd = legacyCapcode;
-    if (configuredCapcodeInd == 0) {
-      configuredCapcodeGrp = kDefaultCapcodeGrp;
-    } else {
-      configuredCapcodeGrp = configuredCapcodeInd + 1;
-    }
-    migratedLegacy = true;
-  }
-  configuredBaud = preferences.getUInt("baud", kDefaultBaud);
-  configuredInvert = preferences.getBool("invert", kDefaultInvert);
-  uint8_t outputValue =
-      preferences.getUChar("output", static_cast<uint8_t>(kDefaultOutputMode));
-  configuredOutputMode =
-      outputValue == static_cast<uint8_t>(OutputMode::kOpenDrain) ? OutputMode::kOpenDrain
-                                                                   : OutputMode::kPushPull;
-  bool hasDataGpio = preferences.isKey("dataGpio");
-  bool hasIdleHigh = preferences.isKey("idleHigh");
-  configuredDataGpio =
-      hasDataGpio ? preferences.getInt("dataGpio", kDataGpio)
-                  : preferences.getInt("data_gpio", kDataGpio);
-  configuredRfSenseGpio = preferences.getInt("rfSenseGpio", kRfSenseGpio);
-  configuredGpioList = preferences.getString("gpioList", "");
-  configuredIdleHigh =
-      hasIdleHigh ? preferences.getBool("idleHigh", kDefaultIdleLineHigh)
-                  : preferences.getBool("idle_high", kDefaultIdleLineHigh);
-  configuredAutoProbe = preferences.getBool("autoProbe", false);
-  pageStore.load(preferences);
-  if (migratedLegacy) {
-    saveSettings();
-  }
-
-  tx.begin(configuredDataGpio, configuredInvert, configuredBaud, configuredOutputMode,
-           configuredIdleHigh);
-  probe.begin(kAlertGpio);
-  configureRfSenseGpio(configuredRfSenseGpio);
-
-  parser.setHandler(handleCommand);
-
-  NimBLEDevice::init(kDeviceName);
-  NimBLEDevice::setPower(ESP_PWR_LVL_P9);
-
-  bleServer = NimBLEDevice::createServer();
-  bleServer->setCallbacks(new ServerCallbacks());
-
-  NimBLEService *service = bleServer->createService(kServiceUUID);
-  rxCharacteristic = service->createCharacteristic(kRxUUID, NIMBLE_PROPERTY::WRITE);
-  rxCharacteristic->setCallbacks(new RxCallbacks());
-
-  statusCharacteristic = service->createCharacteristic(
-      kStatusUUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
-  statusCharacteristic->setValue("READY");
-
-  service->start();
-
-  NimBLEAdvertising *advertising = NimBLEDevice::getAdvertising();
-  advertising->addServiceUUID(kServiceUUID);
-  advertising->setScanResponse(true);
-  advertising->start();
-
-  Serial.println("BLE advertising started.");
-  Serial.println("PagerBridge ready.");
-  Serial.println("Settings:");
-  Serial.println("  CAPIND=" + String(configuredCapcodeInd));
-  Serial.println("  CAPGRP=" + String(configuredCapcodeGrp));
-  Serial.println("  BAUD=" + String(configuredBaud));
-  Serial.println("  INVERT=" + String(configuredInvert ? 1 : 0));
-  Serial.println("  IDLE=" + String(configuredIdleHigh ? 1 : 0));
-  Serial.println("  OUTPUT=" +
-                 String(configuredOutputMode == OutputMode::kPushPull ? "PUSH_PULL"
-                                                                      : "OPEN_DRAIN"));
-  Serial.println("  DATA_GPIO=" + String(configuredDataGpio));
-  Serial.println("  RFSENSE_GPIO=" + String(configuredRfSenseGpio));
-  Serial.println("  ALERT_GPIO=" + String(kAlertGpio));
-  Serial.println("  AUTOPROBE=" + String(configuredAutoProbe ? 1 : 0));
-  queueStatus("READY");
-  if (configuredAutoProbe) {
-    std::vector<uint32_t> caps;
-    caps.push_back(configuredCapcodeInd);
-    if (configuredCapcodeGrp != configuredCapcodeInd) {
-      caps.push_back(configuredCapcodeGrp);
-    }
-    probe.startOneshot(caps);
-  }
+  delay(100);
+  loadConfig();
+  applyConfigPins();
+  attachRfSense();
+  setIdleLine();
+  Serial.println("POCSAG ready. Commands: STATUS, SET, SAVE, LOAD, H, T1, SCOPE, RFSENSE");
 }
 
 void loop() {
-  if (tx.consumeDoneFlag()) {
-    queueStatus("TX_DONE");
-    if (pendingDebugScope) {
-      pendingDebugScope = false;
-      tx.setBaud(debugScopeRestoreBaud);
-      queueStatus("DEBUG_SCOPE done");
-    }
-    if (pendingStoredPage) {
-      pageStore.updateLatestResult("TX_DONE");
-      saveSettings();
-      pendingStoredPage = false;
-    }
-  }
-
-  updateRfSensePulseWidth();
-
-  if (originalAdvisor.isActive()) {
-    originalAdvisor.update();
-  } else if (minLoop.isActive()) {
-    minLoop.update();
-  } else if (autotestFast.isActive()) {
-    autotestFast.update();
-  } else if (autotest2.isActive()) {
-    autotest2.update();
-  } else if (autotest.isActive()) {
-    autotest.update();
-  } else {
-    if (!tx.isBusy() && !txQueue.empty() && !probe.isActive()) {
-      TxRequest request = txQueue.front();
-      txQueue.pop_front();
-      if (request.isRaw) {
-        if (tx.sendBits(std::move(request.rawBits))) {
-          queueStatus("TX_START " + request.label);
-        } else {
-          queueStatus("ERROR TX_BUSY");
-        }
-        return;
-      }
-      auto bits = encoder.buildBitstream(request.capcode, request.message);
-      if (tx.sendBits(std::move(bits))) {
-        queueStatus("TX_START capcode=" + String(request.capcode));
-        if (request.store) {
-          pageStore.add(request.capcode, request.message, millis(), "TX_START");
-          pendingStoredPage = true;
-        }
-      } else {
-        queueStatus("ERROR TX_BUSY");
-      }
-    }
-
-    if (probe.isActive()) {
-      probe.update(
-          [](uint32_t capcode) {
-            configuredCapcodeInd = capcode;
-            if (!capGrpWasExplicitlySet) {
-              configuredCapcodeGrp = capcode + 1;
-            }
-            saveSettings();
-            pageStore.add(capcode, "PROBE_HIT capcode=" + String(capcode), millis(),
-                          "PROBE_HIT");
-            saveSettings();
-            queueStatus("PROBE_HIT capcode=" + String(capcode));
-          },
-          [](uint32_t capcode) {
-            queueStatus("PROBE_STEP capcode=" + String(capcode));
-            queueStatus("TX_START capcode=" + String(capcode));
-          });
-    }
-  }
-
+  static String lineBuffer;
   while (Serial.available() > 0) {
     char c = static_cast<char>(Serial.read());
-    if (c == '\r') {
-      continue;
-    }
-    if (c == '\n') {
-      if (serialBuffer.length() > 0) {
-        parser.handleInput(serialBuffer);
-        serialBuffer = "";
+    if (c == '\n' || c == '\r') {
+      if (lineBuffer.length() > 0) {
+        handleCommand(lineBuffer);
+        lineBuffer = "";
       }
-      continue;
+    } else {
+      lineBuffer += c;
     }
-    serialBuffer += c;
   }
-
-  notifyStatus();
-  delay(5);
+  delay(2);
 }
