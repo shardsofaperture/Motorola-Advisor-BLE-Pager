@@ -15,6 +15,7 @@ constexpr const char *kDeviceName = "PagerBridge";
 // Compile-time configuration.
 constexpr int kDataGpio = 3; // D2 on XIAO ESP32-S3status
 constexpr int kAlertGpio = -1;
+constexpr int kRfSenseGpio = -1;
 constexpr uint32_t kDefaultCapcodeInd = 123456;
 constexpr uint32_t kDefaultCapcodeGrp = 123457;
 constexpr uint32_t kDefaultBaud = 512;
@@ -1538,6 +1539,185 @@ constexpr bool Autotest2Controller::kIdleHighs[];
 constexpr uint32_t Autotest2Controller::kPreambles[];
 constexpr InjectionProfile Autotest2Controller::kProfiles[];
 
+class OriginalAdvisorController {
+ public:
+  explicit OriginalAdvisorController(PocsagTx &tx) : tx_(tx) {}
+
+  void start() {
+    savedBaud_ = configuredBaud;
+    savedInvert_ = configuredInvert;
+    savedIdleHigh_ = configuredIdleHigh;
+    savedOutputMode_ = configuredOutputMode;
+    savedPreambleMs_ = configuredDefaultPreambleMs;
+    configuredBaud = kDefaultBaud;
+    configuredOutputMode = OutputMode::kOpenDrain;
+    configuredIdleHigh = true;
+    configuredDefaultPreambleMs = 2000;
+    tx_.setBaud(configuredBaud);
+    tx_.setOutputMode(configuredOutputMode);
+    tx_.setIdleHigh(configuredIdleHigh);
+    stage_ = Stage::kStatus;
+    stageStartMs_ = millis();
+    stageEndMs_ = 0;
+    nextSendMs_ = 0;
+    rfSenseStartCount_ = rfSensePulseCount;
+    firstInvert_ = configuredInvert;
+    active_ = true;
+    debugStarted_ = false;
+    queueStatus("STATUS ORIGINAL_ADVISOR_TEST START");
+  }
+
+  bool isActive() const { return active_; }
+
+  void update() {
+    if (!active_) {
+      return;
+    }
+    updateRfSensePulseWidth();
+    switch (stage_) {
+      case Stage::kStatus:
+        queueStatus(buildStatusLine());
+        if (configuredRfSenseGpio >= 0) {
+          stage_ = Stage::kWaitRfSense;
+          stageStartMs_ = millis();
+          rfSenseStartCount_ = rfSensePulseCount;
+        } else {
+          stage_ = Stage::kDebugScope;
+        }
+        break;
+      case Stage::kWaitRfSense: {
+        bool seen = rfSensePulseCount != rfSenseStartCount_;
+        if (seen || millis() - stageStartMs_ >= kRfSenseWaitMs) {
+          queueStatus(String("RFSENSE pulses_seen=") + (seen ? "1" : "0"));
+          stage_ = Stage::kDebugScope;
+        }
+        break;
+      }
+      case Stage::kDebugScope:
+        if (!debugStarted_) {
+          if (tx_.isBusy()) {
+            return;
+          }
+          if (!startDebugScope()) {
+            finish("ERROR ORIGINAL_ADVISOR_TEST DEBUG_SCOPE");
+            return;
+          }
+          debugStarted_ = true;
+          return;
+        }
+        if (!pendingDebugScope && !tx_.isBusy()) {
+          stage_ = Stage::kMinLoopFirst;
+          startMinLoop(firstInvert_);
+        }
+        break;
+      case Stage::kMinLoopFirst:
+        runMinLoop();
+        break;
+      case Stage::kMinLoopSecond:
+        runMinLoop();
+        break;
+      case Stage::kDone:
+        finish("STATUS ORIGINAL_ADVISOR_TEST DONE");
+        break;
+    }
+  }
+
+ private:
+  enum class Stage {
+    kStatus,
+    kWaitRfSense,
+    kDebugScope,
+    kMinLoopFirst,
+    kMinLoopSecond,
+    kDone,
+  };
+
+  static constexpr uint32_t kMinLoopDurationMs = 20000;
+  static constexpr uint32_t kMinLoopGapMs = 200;
+  static constexpr uint32_t kRfSenseWaitMs = 5000;
+
+  bool startDebugScope() {
+    std::vector<uint8_t> bits = buildAlternatingBitsForBaud(2000, kDefaultBaud);
+    tx_.setOutputMode(configuredOutputMode);
+    tx_.setInvert(configuredInvert);
+    tx_.setIdleHigh(configuredIdleHigh);
+    debugScopeRestoreBaud = configuredBaud;
+    tx_.setBaud(kDefaultBaud);
+    if (!tx_.sendBits(std::move(bits))) {
+      return false;
+    }
+    pendingDebugScope = true;
+    queueStatus("STATUS DEBUG_SCOPE START");
+    return true;
+  }
+
+  void startMinLoop(bool invert) {
+    configuredInvert = invert;
+    tx_.setInvert(configuredInvert);
+    stageStartMs_ = millis();
+    stageEndMs_ = stageStartMs_ + kMinLoopDurationMs;
+    nextSendMs_ = 0;
+    queueStatus(String("STATUS ORIGINAL_ADVISOR_TEST MIN_LOOP START invert=") +
+                (invert ? "1" : "0"));
+  }
+
+  void runMinLoop() {
+    uint32_t now = millis();
+    if (now >= stageEndMs_) {
+      if (!tx_.isBusy()) {
+        if (stage_ == Stage::kMinLoopFirst) {
+          stage_ = Stage::kMinLoopSecond;
+          startMinLoop(!firstInvert_);
+        } else {
+          stage_ = Stage::kDone;
+        }
+      }
+      return;
+    }
+    if (tx_.isBusy()) {
+      return;
+    }
+    if (nextSendMs_ != 0 && now < nextSendMs_) {
+      return;
+    }
+    if (!send_min_page_with_settings(kDefaultCapcodeInd, 0, 2000, kDefaultBaud,
+                                     configuredInvert, true, OutputMode::kOpenDrain)) {
+      queueStatus("ERROR ORIGINAL_ADVISOR_TEST TX_BUSY");
+      return;
+    }
+    nextSendMs_ = now + kMinLoopGapMs;
+  }
+
+  void finish(const String &status) {
+    active_ = false;
+    configuredBaud = savedBaud_;
+    configuredInvert = savedInvert_;
+    configuredIdleHigh = savedIdleHigh_;
+    configuredOutputMode = savedOutputMode_;
+    configuredDefaultPreambleMs = savedPreambleMs_;
+    tx_.setBaud(configuredBaud);
+    tx_.setInvert(configuredInvert);
+    tx_.setIdleHigh(configuredIdleHigh);
+    tx_.setOutputMode(configuredOutputMode);
+    queueStatus(status);
+  }
+
+  PocsagTx &tx_;
+  bool active_ = false;
+  Stage stage_ = Stage::kStatus;
+  uint32_t stageStartMs_ = 0;
+  uint32_t stageEndMs_ = 0;
+  uint32_t nextSendMs_ = 0;
+  uint32_t rfSenseStartCount_ = 0;
+  bool debugStarted_ = false;
+  bool firstInvert_ = false;
+  uint32_t savedBaud_ = kDefaultBaud;
+  bool savedInvert_ = kDefaultInvert;
+  bool savedIdleHigh_ = kDefaultIdleLineHigh;
+  OutputMode savedOutputMode_ = kDefaultOutputMode;
+  uint32_t savedPreambleMs_ = kDefaultPreambleMs;
+};
+
 class CommandParser {
  public:
   using Handler = std::function<void(const std::vector<String> &)>;
@@ -1685,6 +1865,7 @@ static AutotestController autotest(tx, encoder);
 static AutotestFastController autotestFast(tx);
 static Autotest2Controller autotest2(tx);
 static MinLoopController minLoop(tx);
+static OriginalAdvisorController originalAdvisor(tx);
 static CommandParser parser;
 
 static std::deque<TxRequest> txQueue;
@@ -1703,6 +1884,18 @@ static uint8_t configuredDefaultFunction = kDefaultFunctionBits;
 static uint32_t configuredDefaultPreambleMs = kDefaultPreambleMs;
 static bool pendingDebugScope = false;
 static uint32_t debugScopeRestoreBaud = kDefaultBaud;
+static int configuredRfSenseGpio = kRfSenseGpio;
+static portMUX_TYPE rfSenseMux = portMUX_INITIALIZER_UNLOCKED;
+static volatile uint32_t rfSensePulseCount = 0;
+static volatile uint32_t rfSenseLastRiseUs = 0;
+static volatile uint32_t rfSenseLastPulseMs = 0;
+static volatile bool rfSensePulseHighPending = false;
+static volatile bool rfSenseWindowActive = false;
+static volatile uint32_t rfSenseWindowPulseCount = 0;
+static volatile uint32_t rfSenseWindowPeriodCount = 0;
+static volatile uint64_t rfSenseWindowPeriodSumUs = 0;
+static volatile uint32_t rfSenseWindowMinWidthUs = 0;
+static volatile uint32_t rfSenseWindowMaxWidthUs = 0;
 
 static String serialBuffer;
 
@@ -1717,6 +1910,76 @@ void queueStatus(const String &message) {
   emitStatus(message);
 }
 
+void IRAM_ATTR rfSenseRiseIsr() {
+  uint32_t nowUs = micros();
+  uint32_t nowMs = millis();
+  portENTER_CRITICAL_ISR(&rfSenseMux);
+  ++rfSensePulseCount;
+  if (rfSenseWindowActive) {
+    ++rfSenseWindowPulseCount;
+    if (rfSenseLastRiseUs != 0) {
+      rfSenseWindowPeriodSumUs += (nowUs - rfSenseLastRiseUs);
+      ++rfSenseWindowPeriodCount;
+    }
+  }
+  rfSenseLastRiseUs = nowUs;
+  rfSenseLastPulseMs = nowMs;
+  rfSensePulseHighPending = true;
+  portEXIT_CRITICAL_ISR(&rfSenseMux);
+}
+
+void configureRfSenseGpio(int gpio) {
+  if (configuredRfSenseGpio >= 0) {
+    detachInterrupt(digitalPinToInterrupt(configuredRfSenseGpio));
+  }
+  configuredRfSenseGpio = gpio;
+  if (configuredRfSenseGpio >= 0) {
+    pinMode(configuredRfSenseGpio, INPUT);
+    attachInterrupt(digitalPinToInterrupt(configuredRfSenseGpio), rfSenseRiseIsr, RISING);
+  }
+}
+
+void resetRfSenseWindow() {
+  portENTER_CRITICAL(&rfSenseMux);
+  rfSenseWindowActive = true;
+  rfSenseWindowPulseCount = 0;
+  rfSenseWindowPeriodCount = 0;
+  rfSenseWindowPeriodSumUs = 0;
+  rfSenseWindowMinWidthUs = 0;
+  rfSenseWindowMaxWidthUs = 0;
+  portEXIT_CRITICAL(&rfSenseMux);
+}
+
+void stopRfSenseWindow() {
+  portENTER_CRITICAL(&rfSenseMux);
+  rfSenseWindowActive = false;
+  portEXIT_CRITICAL(&rfSenseMux);
+}
+
+void updateRfSensePulseWidth() {
+  if (configuredRfSenseGpio < 0) {
+    return;
+  }
+  if (!rfSensePulseHighPending) {
+    return;
+  }
+  if (digitalRead(configuredRfSenseGpio) == HIGH) {
+    return;
+  }
+  uint32_t widthUs = micros() - rfSenseLastRiseUs;
+  portENTER_CRITICAL(&rfSenseMux);
+  if (rfSenseWindowActive) {
+    if (rfSenseWindowMinWidthUs == 0 || widthUs < rfSenseWindowMinWidthUs) {
+      rfSenseWindowMinWidthUs = widthUs;
+    }
+    if (widthUs > rfSenseWindowMaxWidthUs) {
+      rfSenseWindowMaxWidthUs = widthUs;
+    }
+  }
+  rfSensePulseHighPending = false;
+  portEXIT_CRITICAL(&rfSenseMux);
+}
+
 void saveSettings() {
   preferences.putUInt("cap_ind", configuredCapcodeInd);
   preferences.putUInt("cap_grp", configuredCapcodeGrp);
@@ -1725,6 +1988,7 @@ void saveSettings() {
   preferences.putBool("invert", configuredInvert);
   preferences.putUChar("output", static_cast<uint8_t>(configuredOutputMode));
   preferences.putInt("dataGpio", configuredDataGpio);
+  preferences.putInt("rfSenseGpio", configuredRfSenseGpio);
   preferences.putString("gpioList", configuredGpioList);
   preferences.putBool("idleHigh", configuredIdleHigh);
   preferences.putBool("autoProbe", configuredAutoProbe);
@@ -1861,6 +2125,7 @@ String buildStatusLine() {
                   String(configuredOutputMode == OutputMode::kPushPull ? "PUSH_PULL"
                                                                        : "OPEN_DRAIN") +
                   " DATA_GPIO=" + String(configuredDataGpio) +
+                  " RFSENSE_GPIO=" + String(configuredRfSenseGpio) +
                   " FUNCTION=" + String(configuredDefaultFunction) +
                   " PREAMBLE_MS=" + String(configuredDefaultPreambleMs) +
                   (configuredGpioList.length() > 0
@@ -2041,6 +2306,48 @@ void handleCommand(const std::vector<String> &tokens) {
     saveSettings();
     queueStatus("STATUS GPIO_LIST=" + configuredGpioList);
     return;
+  }
+  if (cmd == "RFSENSE" && tokens.size() >= 2) {
+    String mode = tokens[1];
+    mode.toUpperCase();
+    if (mode == "STATUS") {
+      if (configuredRfSenseGpio < 0) {
+        queueStatus("RFSENSE disabled");
+        return;
+      }
+      resetRfSenseWindow();
+      uint32_t startMs = millis();
+      while (millis() - startMs < 2000) {
+        updateRfSensePulseWidth();
+        delay(1);
+      }
+      updateRfSensePulseWidth();
+      stopRfSenseWindow();
+      uint32_t pulseCount = 0;
+      uint32_t minWidthUs = 0;
+      uint32_t maxWidthUs = 0;
+      uint32_t periodCount = 0;
+      uint64_t periodSumUs = 0;
+      uint32_t lastPulseMs = 0;
+      portENTER_CRITICAL(&rfSenseMux);
+      pulseCount = rfSenseWindowPulseCount;
+      minWidthUs = rfSenseWindowMinWidthUs;
+      maxWidthUs = rfSenseWindowMaxWidthUs;
+      periodCount = rfSenseWindowPeriodCount;
+      periodSumUs = rfSenseWindowPeriodSumUs;
+      lastPulseMs = rfSenseLastPulseMs;
+      portEXIT_CRITICAL(&rfSenseMux);
+      float avgPeriodMs =
+          periodCount > 0 ? static_cast<float>(periodSumUs) / periodCount / 1000.0f : 0.0f;
+      bool pagerAlive =
+          lastPulseMs > 0 && (millis() - lastPulseMs) <= 10000;
+      queueStatus("RFSENSE count=" + String(pulseCount) +
+                  " min_high_us=" + String(minWidthUs) +
+                  " max_high_us=" + String(maxWidthUs) +
+                  " avg_period_ms=" + String(avgPeriodMs, 2) +
+                  " pager_alive=" + String(pagerAlive ? 1 : 0));
+      return;
+    }
   }
   if (cmd == "SEND_TEST") {
     std::vector<uint8_t> bits = buildTestPattern(configuredCapcodeInd, 0, "TEST");
@@ -2317,6 +2624,31 @@ void handleCommand(const std::vector<String> &tokens) {
     queueStatus("STATUS CODEWORDS QUEUED");
     return;
   }
+  if (cmd == "ORIGINAL_ADVISOR_TEST") {
+    if (originalAdvisor.isActive()) {
+      queueStatus("ERROR ORIGINAL_ADVISOR_TEST BUSY");
+      return;
+    }
+    if (autotest.isActive() || autotest2.isActive() || autotestFast.isActive() ||
+        minLoop.isActive()) {
+      queueStatus("ERROR ORIGINAL_ADVISOR_TEST BUSY");
+      return;
+    }
+    if (tx.isBusy()) {
+      queueStatus("ERROR ORIGINAL_ADVISOR_TEST TX_BUSY");
+      return;
+    }
+    if (probe.isActive()) {
+      probe.stop();
+    }
+    originalAdvisor.start();
+    return;
+  }
+  if (cmd == "ORIGINAL_ADVISOR_HELP") {
+    queueStatus("Inject on pager header pin 4 / LIM DATA node; use open-drain; "
+                "try invert 0/1; optional monitor on header pin 7.");
+    return;
+  }
   if (cmd == "SET" && tokens.size() >= 3) {
     String key = tokens[1];
     key.toUpperCase();
@@ -2394,6 +2726,23 @@ void handleCommand(const std::vector<String> &tokens) {
       queueStatus("STATUS OUTPUT=" +
                   String(configuredOutputMode == OutputMode::kPushPull ? "PUSH_PULL"
                                                                       : "OPEN_DRAIN"));
+      return;
+    }
+    if (key == "RFSENSE") {
+      int pin = -1;
+      if (tokens[2] == "-1") {
+        pin = -1;
+      } else {
+        uint32_t parsed = 0;
+        if (!parseUint32(tokens[2], parsed)) {
+          queueStatus("ERROR RFSENSE INVALID");
+          return;
+        }
+        pin = static_cast<int>(parsed);
+      }
+      configureRfSenseGpio(pin);
+      saveSettings();
+      queueStatus("STATUS RFSENSE_GPIO=" + String(configuredRfSenseGpio));
       return;
     }
     if (key == "AUTOPROBE") {
@@ -2625,6 +2974,7 @@ void setup() {
   configuredDataGpio =
       hasDataGpio ? preferences.getInt("dataGpio", kDataGpio)
                   : preferences.getInt("data_gpio", kDataGpio);
+  configuredRfSenseGpio = preferences.getInt("rfSenseGpio", kRfSenseGpio);
   configuredGpioList = preferences.getString("gpioList", "");
   configuredIdleHigh =
       hasIdleHigh ? preferences.getBool("idleHigh", kDefaultIdleLineHigh)
@@ -2638,6 +2988,7 @@ void setup() {
   tx.begin(configuredDataGpio, configuredInvert, configuredBaud, configuredOutputMode,
            configuredIdleHigh);
   probe.begin(kAlertGpio);
+  configureRfSenseGpio(configuredRfSenseGpio);
 
   parser.setHandler(handleCommand);
 
@@ -2674,6 +3025,7 @@ void setup() {
                  String(configuredOutputMode == OutputMode::kPushPull ? "PUSH_PULL"
                                                                       : "OPEN_DRAIN"));
   Serial.println("  DATA_GPIO=" + String(configuredDataGpio));
+  Serial.println("  RFSENSE_GPIO=" + String(configuredRfSenseGpio));
   Serial.println("  ALERT_GPIO=" + String(kAlertGpio));
   Serial.println("  AUTOPROBE=" + String(configuredAutoProbe ? 1 : 0));
   queueStatus("READY");
@@ -2702,7 +3054,11 @@ void loop() {
     }
   }
 
-  if (minLoop.isActive()) {
+  updateRfSensePulseWidth();
+
+  if (originalAdvisor.isActive()) {
+    originalAdvisor.update();
+  } else if (minLoop.isActive()) {
     minLoop.update();
   } else if (autotestFast.isActive()) {
     autotestFast.update();

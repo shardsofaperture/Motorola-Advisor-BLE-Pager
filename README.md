@@ -56,6 +56,20 @@ If you want PROBE auto-detect to work, wire the pager’s alert indication to **
 3. If any beep/alert is observed, lock that combo and use `SEND_MIN_LOOP` for longer.
 4. If you need brute-force sweeps across pins/profiles, use `AUTOTEST2` (now dwells per combo).
 
+## Original Advisor bring-up (pager header injection)
+Use this mode when injecting on the **pager header pin 4 / LIM DATA** node described in the MotoLoRa Advisor notes.
+
+**Wiring**
+- **DATA injection:** pager header pin 4 / **LIM DATA**.
+- **GND:** common ground between ESP32 and pager.
+- **Optional RFSENSE:** pager header pin 7 (input only, never drive).
+
+**Example commands**
+```
+SET RFSENSE 4
+ORIGINAL_ADVISOR_TEST
+```
+
 ## No RF service bring-up
 If AUTOTEST never decodes, confirm the wiring is on the **RF board DATA pin** and the line is **open-collector**. Other pads (TA31142, discriminator audio, TSP) are not valid for raw NRZ injection.
 
@@ -161,6 +175,18 @@ Store a list of candidate DATA GPIOs for AUTOTEST2 (used when moving the injecti
 SET_GPIO_LIST 3,4
 ```
 
+### SET RFSENSE <gpio|-1>
+Configure the optional pager header pin 7 sense input (`-1` disables it).
+```
+SET RFSENSE 4
+```
+
+### RFSENSE STATUS
+Measure pulse statistics on the pager header pin 7 sense input.
+```
+RFSENSE STATUS
+```
+
 ### SET_IDLE <0|1>
 Set idle polarity (1 = idle high, 0 = idle low).
 ```
@@ -208,6 +234,18 @@ Repeat a minimal page continuously for the specified timeout (no sweep). Uses cu
 ```
 SEND_MIN_LOOP 123456 0 30
 SEND_MIN_LOOP 123456 0 30 1125
+```
+
+### ORIGINAL_ADVISOR_TEST
+Run the deterministic bring-up sequence for the pager header injection mode.
+```
+ORIGINAL_ADVISOR_TEST
+```
+
+### ORIGINAL_ADVISOR_HELP
+Print a one-line hint about the original advisor wiring.
+```
+ORIGINAL_ADVISOR_HELP
 ```
 
 ### SET_RATE <512|1200|2400>
