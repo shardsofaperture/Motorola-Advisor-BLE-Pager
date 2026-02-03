@@ -18,6 +18,8 @@ struct Config {
   bool idleHigh = true;
   OutputMode output = OutputMode::kOpenDrain;
   uint32_t preambleMs = 2000;
+  bool odPullup = false;
+  String bootPreset = "pager";
   uint32_t capInd = 1422890;
   uint32_t capGrp = 1422890;
   uint8_t functionBits = 0;
@@ -36,6 +38,7 @@ static size_t txSize = 0;
 static bool txInvert = false;
 static bool txIdleHigh = true;
 static OutputMode txOutput = OutputMode::kOpenDrain;
+static bool txOdPullup = false;
 static int txGpio = 3;
 
 static volatile uint32_t rfSenseCount = 0;
@@ -168,7 +171,7 @@ static void applyLineState(bool logicalHigh) {
   bool bit = txInvert ? !logicalHigh : logicalHigh;
   if (txOutput == OutputMode::kOpenDrain) {
     if (bit) {
-      pinMode(txGpio, INPUT);
+      pinMode(txGpio, txOdPullup ? INPUT_PULLUP : INPUT);
     } else {
       pinMode(txGpio, OUTPUT);
       digitalWrite(txGpio, LOW);
@@ -213,7 +216,8 @@ static void setIdleLine() {
 }
 
 static bool startTx(const std::vector<uint8_t> &bits, uint32_t baud, bool invert,
-                    bool idleHigh, OutputMode outputMode, int dataGpio) {
+                    bool idleHigh, OutputMode outputMode, bool odPullup,
+                    int dataGpio) {
   if (txActive) {
     return false;
   }
@@ -228,6 +232,7 @@ static bool startTx(const std::vector<uint8_t> &bits, uint32_t baud, bool invert
   txInvert = invert;
   txIdleHigh = idleHigh;
   txOutput = outputMode;
+  txOdPullup = odPullup;
   txGpio = dataGpio;
   uint32_t periodUs = 1000000UL / baud;
   timerAlarmWrite(txTimer, periodUs, true);
@@ -354,9 +359,45 @@ static void applyConfigPins() {
   txInvert = config.invert;
   txIdleHigh = config.idleHigh;
   txOutput = config.output;
+  txOdPullup = config.odPullup;
   txGpio = config.dataGpio;
   setIdleLine();
   applyRfSenseConfig();
+}
+
+static bool applyPreset(const String &name, bool report) {
+  String normalized = name;
+  normalized.toLowerCase();
+  if (normalized == "pager") {
+    config.output = OutputMode::kOpenDrain;
+    config.idleHigh = true;
+    config.invert = false;
+    config.preambleMs = 2000;
+    config.odPullup = false;
+  } else if (normalized == "bench") {
+    config.output = OutputMode::kOpenDrain;
+    config.idleHigh = true;
+    config.invert = false;
+    config.preambleMs = 2000;
+    config.odPullup = true;
+  } else if (normalized == "scope") {
+    config.output = OutputMode::kPushPull;
+    config.idleHigh = true;
+    config.invert = false;
+    config.preambleMs = 2000;
+  } else if (normalized == "invert") {
+    config.invert = !config.invert;
+  } else {
+    if (report) {
+      Serial.println("ERR: preset must be pager|bench|scope|invert");
+    }
+    return false;
+  }
+  applyConfigPins();
+  if (report) {
+    Serial.printf("OK PRESET %s\n", normalized.c_str());
+  }
+  return true;
 }
 
 static void writeConfigFile() {
@@ -372,6 +413,8 @@ static void writeConfigFile() {
   file.printf("  \"idleHigh\": %s,\n", config.idleHigh ? "true" : "false");
   file.printf("  \"output\": \"%s\",\n", outputMode.c_str());
   file.printf("  \"preambleMs\": %u,\n", config.preambleMs);
+  file.printf("  \"odPullup\": %s,\n", config.odPullup ? "true" : "false");
+  file.printf("  \"bootPreset\": \"%s\",\n", config.bootPreset.c_str());
   file.printf("  \"capInd\": %u,\n", config.capInd);
   file.printf("  \"capGrp\": %u,\n", config.capGrp);
   file.printf("  \"functionBits\": %u,\n", config.functionBits);
@@ -412,6 +455,14 @@ static void loadConfig() {
   if (extractJsonValue(json, "preambleMs", value)) {
     config.preambleMs = static_cast<uint32_t>(value.toInt());
   }
+  if (extractJsonValue(json, "odPullup", value)) {
+    parseBool(value, config.odPullup);
+  }
+  if (extractJsonValue(json, "bootPreset", value)) {
+    if (value.length() > 0) {
+      config.bootPreset = value;
+    }
+  }
   if (extractJsonValue(json, "capInd", value)) {
     config.capInd = static_cast<uint32_t>(value.toInt());
   }
@@ -432,10 +483,11 @@ static void loadConfig() {
 static void printStatus() {
   String outputMode = (config.output == OutputMode::kOpenDrain) ? "open_drain" : "push_pull";
   Serial.printf(
-      "baud=%u invert=%s idleHigh=%s output=%s preambleMs=%u capInd=%u capGrp=%u "
-      "functionBits=%u dataGpio=%d rfSenseGpio=%d\n",
+      "baud=%u invert=%s idleHigh=%s output=%s preambleMs=%u odPullup=%s bootPreset=%s "
+      "capInd=%u capGrp=%u functionBits=%u dataGpio=%d rfSenseGpio=%d\n",
       config.baud, config.invert ? "true" : "false", config.idleHigh ? "true" : "false",
-      outputMode.c_str(), config.preambleMs, config.capInd, config.capGrp, config.functionBits,
+      outputMode.c_str(), config.preambleMs, config.odPullup ? "true" : "false",
+      config.bootPreset.c_str(), config.capInd, config.capGrp, config.functionBits,
       config.dataGpio, config.rfSenseGpio);
 }
 
@@ -455,7 +507,7 @@ static std::vector<uint8_t> buildAlternatingBits(uint32_t durationMs, uint32_t b
 static void sendMessageOnce(const String &message, uint32_t capcode) {
   std::vector<uint8_t> bits =
       encoder.buildBitstream(capcode, config.functionBits, message, config.preambleMs, config.baud);
-  if (!startTx(bits, config.baud, config.invert, config.idleHigh, config.output,
+  if (!startTx(bits, config.baud, config.invert, config.idleHigh, config.output, config.odPullup,
                config.dataGpio)) {
     Serial.println("BUSY");
     return;
@@ -465,7 +517,7 @@ static void sendMessageOnce(const String &message, uint32_t capcode) {
 
 static void handleScope(uint32_t durationMs) {
   std::vector<uint8_t> bits = buildAlternatingBits(durationMs, config.baud);
-  if (!startTx(bits, config.baud, config.invert, config.idleHigh, config.output,
+  if (!startTx(bits, config.baud, config.invert, config.idleHigh, config.output, config.odPullup,
                config.dataGpio)) {
     Serial.println("BUSY");
     return;
@@ -516,6 +568,16 @@ static void applySetCommand(const String &key, const String &value) {
     parseOutputMode(value, config.output);
   } else if (normalizedKey == "preamblems") {
     config.preambleMs = static_cast<uint32_t>(value.toInt());
+  } else if (normalizedKey == "odpullup") {
+    parseBool(value, config.odPullup);
+  } else if (normalizedKey == "bootpreset") {
+    String preset = value;
+    preset.toLowerCase();
+    if (!applyPreset(preset, false)) {
+      Serial.println("ERR: preset must be pager|bench|scope|invert");
+      return;
+    }
+    config.bootPreset = preset;
   } else if (normalizedKey == "capind") {
     config.capInd = static_cast<uint32_t>(value.toInt());
   } else if (normalizedKey == "capgrp") {
@@ -581,6 +643,12 @@ static void handleCommand(const String &line) {
     runTestLoop(static_cast<uint32_t>(value.toInt()));
     return;
   }
+  if (cmd == "PRESET") {
+    String value = (space < 0) ? "" : trimmed.substring(space + 1);
+    value.trim();
+    applyPreset(value, true);
+    return;
+  }
   if (cmd == "SET") {
     int secondSpace = trimmed.indexOf(' ', space + 1);
     if (space < 0 || secondSpace < 0) {
@@ -599,10 +667,13 @@ void setup() {
   Serial.begin(115200);
   delay(100);
   loadConfig();
-  applyConfigPins();
+  if (!applyPreset(config.bootPreset, false)) {
+    applyConfigPins();
+  }
   attachRfSense();
   setIdleLine();
-  Serial.println("POCSAG ready. Commands: STATUS, SET, SAVE, LOAD, H, T1, SCOPE, RFSENSE");
+  Serial.println(
+      "POCSAG ready. Commands: STATUS, SET, SAVE, LOAD, H, T1, SCOPE, RFSENSE, PRESET");
 }
 
 void loop() {
