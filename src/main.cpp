@@ -47,6 +47,7 @@ static bool txIdleHigh = true;
 static OutputMode txOutput = OutputMode::kOpenDrain;
 static bool txOdPullup = false;
 static int txGpio = 4;
+static void printStatus();
 
 class PocsagEncoder {
  public:
