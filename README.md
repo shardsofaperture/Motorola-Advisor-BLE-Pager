@@ -1,92 +1,43 @@
 # Advisor II BLE Receiver (POCSAG NRZ Simplified)
 
 This firmware outputs a deterministic POCSAG NRZ stream on an ESP32-S3 GPIO for scope validation
-and pager injection. The build keeps Arduino/PlatformIO and uses LittleFS for config storage.
+and pager injection. Configuration is stored in LittleFS at `/config.json`.
 
-## Quick Start
+## Quick start
 ### Wiring
-- **XIAO GND → pager GND** (common ground required; battery negative is fine).
-- **XIAO D3 (GPIO4) → pager data-in** through a **1k–2k2 series resistor**.
+- **DATA → pager pin 4**
+- **GND → pager GND** (common ground)
 
-### Serial usage (115200)
-- `STATUS`
-- `SCOPE 2000`
-- `T1 10`
-- `H`
-- `SAVE`
+### First boot
+On first boot the device prints **HELP** automatically so the README is optional.
 
-## Wiring notes
-- The pager data-in pin is **post-slicer, pre-ASIC** and expects open-collector style drive.
-
-### Drive modes
-- **open_drain (default)**
-  - Logic 1 / idle: **Hi-Z** (pinMode INPUT, no pullups)
-  - Logic 0: **drive LOW** (pinMode OUTPUT, LOW)
-- **push_pull**
-  - Logic 1 / idle: **drive HIGH**
-  - Logic 0: **drive LOW**
-
-## Config file
-The device uses LittleFS with `/config.json`. On first boot, it creates the file with defaults.
-
-```json
-{
-  "baud": 512,
-  "invert": false,
-  "idleHigh": true,
-  "output": "open_drain",
-  "preambleMs": 2000,
-  "odPullup": false,
-  "bootPreset": "pager",
-  "capInd": 1422890,
-  "capGrp": 1422890,
-  "functionBits": 0,
-  "dataGpio": 4
-}
-```
-
-**Field notes**
-- `baud`: 512, 1200, or 2400.
-- `invert`: invert NRZ bits before output.
-- `idleHigh`: logical idle state.
-- `output`: `open_drain` or `push_pull`.
-- `preambleMs`: preamble duration (1010...)
-- `odPullup`: when `output` is `open_drain`, drive idle/high as `INPUT_PULLUP` if true.
-- `bootPreset`: preset name to apply at boot (`pager`, `bench`, `scope`, `invert`).
-- `capInd` / `capGrp`: capcodes (no auto +1).
-- `functionBits`: 0–3.
-- `dataGpio`: output pin.
-
-## Default settings
-- `baud`: 512
-- `invert`: false
-- `idleHigh`: true
-- `output`: open_drain
-- `preambleMs`: 2000
-- `capInd`: 1422890
-- `capGrp`: 1422890
-- `functionBits`: 0
-- `dataGpio`: GPIO4 (XIAO D3)
+### Recommended bring-up order
+1. `SCOPE 2000` (confirm edges)
+2. `ADDR 10 IND` (prove address-only alert)
+3. `T1 10` (try `HELLO WORLD`)
 
 ## Commands (Serial @ 115200)
-POCSAG TX ready.
-Data pin: GPIO4 (XIAO D3). baud=512 invert=false idleHigh=true output=open_drain preambleMs=2000
-Commands:
-  STATUS                 - show current settings
-  SET <k> <v>            - change setting
-  SAVE / LOAD            - persist/restore config.json
-  H                      - send one test page "H" to capInd
-  T1 <sec>               - loop HELLO WORLD for <sec>
-  SCOPE <ms>             - output 1010 pattern for scope
-  HELP or ?              - show this menu
-Examples:
-  STATUS
-  SET baud 512
-  SET invert true
-  SCOPE 2000
-  T1 10
-  H
-  SAVE
+- `STATUS`
+- `SET <key> <value>`
+- `SAVE` / `LOAD`
+- `H` (send one "H")
+- `T1 <seconds>` (repeat `HELLO WORLD`)
+- `ADDR <seconds> [IND|GRP|BOTH]` (address-only burst loop)
+- `SCOPE <ms>`
+- `HELP` / `?`
+
+### SET keys
+- `baud` (512/1200/2400)
+- `invert`
+- `idleHigh`
+- `output` (`open_drain` / `push_pull`)
+- `preambleMs`
+- `capInd`
+- `capGrp`
+- `functionBits`
+- `dataGpio`
+- `frameGapMs`
+- `repeatPreambleEachFrame`
 
 ## Build & flash (PlatformIO)
 ```bash
