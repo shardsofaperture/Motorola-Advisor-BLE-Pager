@@ -22,7 +22,7 @@ struct Config {
   uint8_t functionBits = 2;
   int dataGpio = 4;
   OutputMode output = OutputMode::kPushPull;
-  bool invertWords = true;
+  bool invertWords = false;
   bool driveOneLow = true;
   bool idleHigh = true;
   String bootPreset = "ADVISOR";
@@ -174,7 +174,7 @@ class PocsagEncoder {
     uint32_t addressWord = buildAddressWord(capcode, functionBits);
     std::vector<uint32_t> messageWords = buildAlphaWords(message);
 
-    size_t index = frame;
+    size_t index = static_cast<size_t>(frame) * 2;
     if (index < words.size()) {
       words[index++] = addressWord;
     }
@@ -351,7 +351,7 @@ static bool applyPreset(const String &name, bool report) {
     config.functionBits = 2;
     config.dataGpio = 4;
     config.output = OutputMode::kPushPull;
-    config.invertWords = true;
+    config.invertWords = false;
     config.driveOneLow = true;
     config.idleHigh = true;
   } else if (normalized == "generic" || normalized == "lora_baseline") {
@@ -542,7 +542,7 @@ static std::vector<uint32_t> buildMinimalBatch(uint32_t capcode, uint8_t functio
   std::vector<uint32_t> words(16, kIdleWord);
   uint8_t frame = static_cast<uint8_t>(capcode & 0x7);
   uint32_t addressWord = encoder.buildAddressCodeword(capcode, functionBits);
-  size_t index = frame;
+  size_t index = static_cast<size_t>(frame) * 2;
   if (index < words.size()) {
     words[index] = addressWord;
   }
@@ -696,6 +696,8 @@ static void printHelp() {
   Serial.println("  SEND HELLO WORLD");
   Serial.println("  SEND_MIN 1422890 0");
   Serial.println("  T1 10");
+  Serial.println(
+      "ADVISOR preset: baud=512 invertWords=false driveOneLow=true idleHigh=true output=push_pull");
   Serial.printf(
       "Defaults: baud=%u preambleBits=%u output=%s dataGpio=%d invertWords=%s driveOneLow=%s idleHigh=%s\n",
       config.baud, config.preambleBits,

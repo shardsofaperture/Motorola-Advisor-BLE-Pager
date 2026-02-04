@@ -18,7 +18,8 @@ Configuration lives in LittleFS at `/config.json`.
    - `DEBUG_SCOPE`
    - `SEND_MIN 1422890 0`
 
-Defaults: baud=512, invert=1 (driveOneLow), idleHigh=1, output=push_pull.
+Defaults (ADVISOR preset): baud=512, invertWords=false, driveOneLow=true, idleHigh=true,
+output=push_pull.
 
 ## If scope looks good but pager still doesn’t decode
 - Toggle `SET output open_drain` vs `SET output push_pull` (open-drain needs an external pull-up).
