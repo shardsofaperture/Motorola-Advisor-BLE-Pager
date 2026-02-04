@@ -7,7 +7,8 @@ namespace {
 constexpr const char *kConfigPath = "/config.json";
 constexpr uint32_t kSyncWord = 0x7CD215D8;
 constexpr uint32_t kIdleWord = 0x7A89C197;
-constexpr uint32_t kDefaultIntervalMs = 250;
+constexpr uint32_t kMinFrameGapMs = 10;
+constexpr uint32_t kMaxFrameGapMs = 200;
 }
 
 enum class OutputMode : uint8_t { kOpenDrain = 0, kPushPull = 1 };
@@ -24,6 +25,9 @@ struct Config {
   uint32_t capGrp = 1422890;
   uint8_t functionBits = 0;
   int dataGpio = 4;
+  uint32_t frameGapMs = 60;
+  bool repeatPreambleEachFrame = true;
+  bool firstBootShown = false;
 };
 
 static Config config;
@@ -49,6 +53,18 @@ class PocsagEncoder {
     appendPreamble(bits, preambleMs, baud);
     appendWord(bits, kSyncWord);
     std::vector<uint32_t> batch = buildSingleBatch(capcode, functionBits, message);
+    for (uint32_t word : batch) {
+      appendWord(bits, word);
+    }
+    return bits;
+  }
+
+  std::vector<uint8_t> buildAddressOnlyBitstream(uint32_t capcode, uint8_t functionBits,
+                                                 uint32_t preambleMs, uint32_t baud) const {
+    std::vector<uint8_t> bits;
+    appendPreamble(bits, preambleMs, baud);
+    appendWord(bits, kSyncWord);
+    std::vector<uint32_t> batch = buildAddressOnlyBatch(capcode, functionBits);
     for (uint32_t word : batch) {
       appendWord(bits, word);
     }
@@ -91,12 +107,24 @@ class PocsagEncoder {
     return words;
   }
 
+  std::vector<uint32_t> buildAddressOnlyBatch(uint32_t capcode, uint8_t functionBits) const {
+    std::vector<uint32_t> words(16, kIdleWord);
+    uint8_t frame = static_cast<uint8_t>(capcode & 0x7);
+    uint32_t addressWord = buildAddressWord(capcode, functionBits);
+
+    size_t index = frame * 2;
+    if (index < words.size()) {
+      words[index] = addressWord;
+    }
+    return words;
+  }
+
   std::vector<uint32_t> buildAlphaWords(const String &message) const {
     std::vector<uint8_t> bits;
     bits.reserve(message.length() * 7);
     for (size_t i = 0; i < message.length(); ++i) {
       uint8_t value = static_cast<uint8_t>(message[i]) & 0x7F;
-      for (int b = 0; b <= 6; ++b) {
+      for (int b = 6; b >= 0; --b) {
         bits.push_back(static_cast<uint8_t>((value >> b) & 0x1));
       }
     }
@@ -237,8 +265,6 @@ static bool startTx(const std::vector<uint8_t> &bits, uint32_t baud, bool invert
   timerAlarmEnable(txTimer);
   return true;
 }
-
-static bool isTxActive() { return txActive; }
 
 static void waitForTxComplete() {
   while (txActive) {
@@ -382,20 +408,25 @@ static void writeConfigFile() {
   file.printf("  \"capInd\": %u,\n", config.capInd);
   file.printf("  \"capGrp\": %u,\n", config.capGrp);
   file.printf("  \"functionBits\": %u,\n", config.functionBits);
-  file.printf("  \"dataGpio\": %d\n", config.dataGpio);
+  file.printf("  \"dataGpio\": %d,\n", config.dataGpio);
+  file.printf("  \"frameGapMs\": %u,\n", config.frameGapMs);
+  file.printf("  \"repeatPreambleEachFrame\": %s,\n",
+              config.repeatPreambleEachFrame ? "true" : "false");
+  file.printf("  \"firstBootShown\": %s\n", config.firstBootShown ? "true" : "false");
   file.println("}");
   file.close();
 }
 
 static bool loadConfig() {
   config = Config();
+  bool shouldShowHelp = false;
   if (!LittleFS.begin(true)) {
     Serial.println("ERR: LittleFS mount failed");
     return false;
   }
   if (!LittleFS.exists(kConfigPath)) {
-    writeConfigFile();
-    return true;
+    shouldShowHelp = true;
+    return shouldShowHelp;
   }
   String json = readFileToString(kConfigPath);
   String value;
@@ -443,18 +474,34 @@ static bool loadConfig() {
       config.dataGpio = 4;
     }
   }
-  return false;
+  if (extractJsonValue(json, "frameGapMs", value)) {
+    uint32_t gap = static_cast<uint32_t>(value.toInt());
+    if (gap < kMinFrameGapMs) {
+      gap = kMinFrameGapMs;
+    } else if (gap > kMaxFrameGapMs) {
+      gap = kMaxFrameGapMs;
+    }
+    config.frameGapMs = gap;
+  }
+  if (extractJsonValue(json, "repeatPreambleEachFrame", value)) {
+    parseBool(value, config.repeatPreambleEachFrame);
+  }
+  if (extractJsonValue(json, "firstBootShown", value)) {
+    parseBool(value, config.firstBootShown);
+  }
+  shouldShowHelp = !config.firstBootShown;
+  return shouldShowHelp;
 }
 
 static void printStatus() {
   String outputMode = (config.output == OutputMode::kOpenDrain) ? "open_drain" : "push_pull";
   Serial.printf(
       "baud=%u invert=%s idleHigh=%s output=%s preambleMs=%u odPullup=%s bootPreset=%s "
-      "capInd=%u capGrp=%u functionBits=%u dataGpio=%d\n",
+      "capInd=%u capGrp=%u functionBits=%u dataGpio=%d frameGapMs=%u repeatPreambleEachFrame=%s\n",
       config.baud, config.invert ? "true" : "false", config.idleHigh ? "true" : "false",
       outputMode.c_str(), config.preambleMs, config.odPullup ? "true" : "false",
       config.bootPreset.c_str(), config.capInd, config.capGrp, config.functionBits,
-      config.dataGpio);
+      config.dataGpio, config.frameGapMs, config.repeatPreambleEachFrame ? "true" : "false");
 }
 
 static std::vector<uint8_t> buildAlternatingBits(uint32_t durationMs, uint32_t baud) {
@@ -471,8 +518,8 @@ static std::vector<uint8_t> buildAlternatingBits(uint32_t durationMs, uint32_t b
 }
 
 static void sendMessageOnce(const String &message, uint32_t capcode) {
-  std::vector<uint8_t> bits =
-      encoder.buildBitstream(capcode, config.functionBits, message, config.preambleMs, config.baud);
+  std::vector<uint8_t> bits = encoder.buildBitstream(
+      capcode, config.functionBits, message, config.preambleMs, config.baud);
   if (!startTx(bits, config.baud, config.invert, config.idleHigh, config.output, config.odPullup,
                config.dataGpio)) {
     Serial.println("BUSY");
@@ -491,18 +538,64 @@ static void handleScope(uint32_t durationMs) {
   waitForTxComplete();
 }
 
-static void runTestLoop(uint32_t seconds) {
+static void waitForTxAndGap() {
+  waitForTxComplete();
+  setIdleLine();
+  delay(config.frameGapMs);
+}
+
+static bool startTxWithRetry(const std::vector<uint8_t> &bits) {
+  while (!startTx(bits, config.baud, config.invert, config.idleHigh, config.output, config.odPullup,
+                  config.dataGpio)) {
+    delay(5);
+  }
+  return true;
+}
+
+static uint32_t clampFrameGap(uint32_t gap) {
+  if (gap < kMinFrameGapMs) {
+    return kMinFrameGapMs;
+  }
+  if (gap > kMaxFrameGapMs) {
+    return kMaxFrameGapMs;
+  }
+  return gap;
+}
+
+static void runMessageLoop(uint32_t seconds, const String &message, uint32_t capcode) {
   uint32_t start = millis();
-  uint32_t next = start;
+  bool first = true;
   while ((millis() - start) < (seconds * 1000UL)) {
-    if (!isTxActive()) {
-      sendMessageOnce("HELLO WORLD", config.capInd);
+    uint32_t preambleMs =
+        (config.repeatPreambleEachFrame || first) ? config.preambleMs : 0;
+    std::vector<uint8_t> bits =
+        encoder.buildBitstream(capcode, config.functionBits, message, preambleMs, config.baud);
+    startTxWithRetry(bits);
+    waitForTxAndGap();
+    first = false;
+  }
+}
+
+static void runAddressLoop(uint32_t seconds, uint32_t capInd, uint32_t capGrp,
+                           const String &mode) {
+  uint32_t start = millis();
+  bool first = true;
+  bool sendIndNext = true;
+  while ((millis() - start) < (seconds * 1000UL)) {
+    uint32_t preambleMs =
+        (config.repeatPreambleEachFrame || first) ? config.preambleMs : 0;
+    uint32_t target = capInd;
+    if (mode == "GRP") {
+      target = capGrp;
+    } else if (mode == "BOTH") {
+      target = sendIndNext ? capInd : capGrp;
+      sendIndNext = !sendIndNext;
     }
-    next += kDefaultIntervalMs;
-    uint32_t now = millis();
-    if (next > now) {
-      delay(next - now);
-    }
+    std::vector<uint8_t> bits =
+        encoder.buildAddressOnlyBitstream(target, config.functionBits, preambleMs, config.baud);
+    startTxWithRetry(bits);
+    waitForTxAndGap();
+    first = false;
   }
 }
 
@@ -536,6 +629,11 @@ static void applySetCommand(const String &key, const String &value) {
     } else {
       config.dataGpio = 4;
     }
+  } else if (normalizedKey == "framegapms") {
+    uint32_t gap = static_cast<uint32_t>(value.toInt());
+    config.frameGapMs = clampFrameGap(gap);
+  } else if (normalizedKey == "repeatpreambleeachframe") {
+    parseBool(value, config.repeatPreambleEachFrame);
   } else {
     Serial.println("ERR: unknown key");
     return;
@@ -557,14 +655,18 @@ static void printHelp() {
   Serial.println("  SAVE / LOAD            - persist/restore config.json");
   Serial.println("  H                      - send one test page \"H\" to capInd");
   Serial.println("  T1 <sec>               - loop HELLO WORLD for <sec>");
+  Serial.println("  ADDR <sec> [IND|GRP|BOTH] - address-only loop");
   Serial.println("  SCOPE <ms>             - output 1010 pattern for scope");
   Serial.println("  HELP or ?              - show this menu");
+  Serial.println("SET keys: baud invert idleHigh output preambleMs capInd capGrp functionBits dataGpio");
+  Serial.println("          frameGapMs repeatPreambleEachFrame");
   Serial.println("Examples:");
   Serial.println("  STATUS");
   Serial.println("  SET baud 512");
   Serial.println("  SET invert true");
   Serial.println("  SCOPE 2000");
   Serial.println("  T1 10");
+  Serial.println("  ADDR 10 IND");
   Serial.println("  H");
   Serial.println("  SAVE");
 }
@@ -605,7 +707,24 @@ static void handleCommand(const String &line) {
   }
   if (cmd == "T1") {
     String value = (space < 0) ? "" : trimmed.substring(space + 1);
-    runTestLoop(static_cast<uint32_t>(value.toInt()));
+    runMessageLoop(static_cast<uint32_t>(value.toInt()), "HELLO WORLD", config.capInd);
+    return;
+  }
+  if (cmd == "ADDR") {
+    int secondSpace = (space < 0) ? -1 : trimmed.indexOf(' ', space + 1);
+    String secondsValue = (space < 0) ? "" : trimmed.substring(space + 1, secondSpace);
+    String mode = (secondSpace < 0) ? "IND" : trimmed.substring(secondSpace + 1);
+    mode.trim();
+    mode.toUpperCase();
+    if (mode.length() == 0) {
+      mode = "IND";
+    }
+    if (mode != "IND" && mode != "GRP" && mode != "BOTH") {
+      Serial.println("ERR: ADDR <sec> [IND|GRP|BOTH]");
+      return;
+    }
+    runAddressLoop(static_cast<uint32_t>(secondsValue.toInt()), config.capInd, config.capGrp,
+                   mode);
     return;
   }
   if (cmd == "PRESET") {
@@ -635,14 +754,16 @@ static void handleCommand(const String &line) {
 void setup() {
   Serial.begin(115200);
   delay(100);
-  bool firstBoot = loadConfig();
+  loadConfig();
   if (!applyPreset(config.bootPreset, false)) {
     applyConfigPins();
   }
   setIdleLine();
   Serial.println("POCSAG TX ready. Type HELP or ? for commands.");
-  if (firstBoot) {
+  if (!config.firstBootShown) {
     printHelp();
+    config.firstBootShown = true;
+    writeConfigFile();
   }
 }
 
