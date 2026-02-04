@@ -174,7 +174,7 @@ class PocsagEncoder {
     uint32_t addressWord = buildAddressWord(capcode, functionBits);
     std::vector<uint32_t> messageWords = buildAlphaWords(message);
 
-    size_t index = frame * 2;
+    size_t index = frame;
     if (index < words.size()) {
       words[index++] = addressWord;
     }
@@ -542,7 +542,7 @@ static std::vector<uint32_t> buildMinimalBatch(uint32_t capcode, uint8_t functio
   std::vector<uint32_t> words(16, kIdleWord);
   uint8_t frame = static_cast<uint8_t>(capcode & 0x7);
   uint32_t addressWord = encoder.buildAddressCodeword(capcode, functionBits);
-  size_t index = frame * 2;
+  size_t index = frame;
   if (index < words.size()) {
     words[index] = addressWord;
   }
