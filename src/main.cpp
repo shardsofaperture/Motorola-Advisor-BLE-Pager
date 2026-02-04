@@ -1,17 +1,19 @@
 #include <Arduino.h>
 #include <LittleFS.h>
 
+#include <cmath>
 #include <vector>
 
 namespace {
 constexpr const char *kConfigPath = "/config.json";
 constexpr uint32_t kSyncWord = 0x7CD215D8;
 constexpr uint32_t kIdleWord = 0x7A89C197;
-constexpr uint32_t kMinFrameGapMs = 10;
-constexpr uint32_t kMaxFrameGapMs = 200;
+constexpr uint32_t kMinFrameGapMs = 0;
+constexpr uint32_t kMaxFrameGapMs = 1000;
 }
 
 enum class OutputMode : uint8_t { kOpenDrain = 0, kPushPull = 1 };
+enum class AlphaBitOrder : uint8_t { kLsbFirst = 0, kMsbFirst = 1 };
 
 struct Config {
   uint32_t baud = 512;
@@ -25,8 +27,10 @@ struct Config {
   uint32_t capGrp = 1422890;
   uint8_t functionBits = 0;
   int dataGpio = 4;
+  float baudScale = 1.0f;
   uint32_t frameGapMs = 60;
   bool repeatPreambleEachFrame = true;
+  AlphaBitOrder alphaBitOrder = AlphaBitOrder::kLsbFirst;
   bool firstBootShown = false;
 };
 
@@ -47,12 +51,12 @@ static int txGpio = 4;
 class PocsagEncoder {
  public:
   std::vector<uint8_t> buildBitstream(uint32_t capcode, uint8_t functionBits,
-                                      const String &message, uint32_t preambleMs,
-                                      uint32_t baud) const {
+                                      AlphaBitOrder alphaBitOrder, const String &message,
+                                      uint32_t preambleMs, uint32_t baud) const {
     std::vector<uint8_t> bits;
     appendPreamble(bits, preambleMs, baud);
     appendWord(bits, kSyncWord);
-    std::vector<uint32_t> batch = buildSingleBatch(capcode, functionBits, message);
+    std::vector<uint32_t> batch = buildSingleBatch(capcode, functionBits, alphaBitOrder, message);
     for (uint32_t word : batch) {
       appendWord(bits, word);
     }
@@ -72,8 +76,8 @@ class PocsagEncoder {
   }
 
   std::vector<uint32_t> buildBatchWords(uint32_t capcode, uint8_t functionBits,
-                                        const String &message) const {
-    return buildSingleBatch(capcode, functionBits, message);
+                                        AlphaBitOrder alphaBitOrder, const String &message) const {
+    return buildSingleBatch(capcode, functionBits, alphaBitOrder, message);
   }
 
  private:
@@ -93,11 +97,12 @@ class PocsagEncoder {
   }
 
   std::vector<uint32_t> buildSingleBatch(uint32_t capcode, uint8_t functionBits,
+                                         AlphaBitOrder alphaBitOrder,
                                          const String &message) const {
     std::vector<uint32_t> words(16, kIdleWord);
     uint8_t frame = static_cast<uint8_t>(capcode & 0x7);
     uint32_t addressWord = buildAddressWord(capcode, functionBits);
-    std::vector<uint32_t> messageWords = buildAlphaWords(message);
+    std::vector<uint32_t> messageWords = buildAlphaWords(alphaBitOrder, message);
 
     size_t index = frame * 2;
     if (index < words.size()) {
@@ -124,13 +129,20 @@ class PocsagEncoder {
     return words;
   }
 
-  std::vector<uint32_t> buildAlphaWords(const String &message) const {
+  std::vector<uint32_t> buildAlphaWords(AlphaBitOrder alphaBitOrder,
+                                        const String &message) const {
     std::vector<uint8_t> bits;
     bits.reserve(message.length() * 7);
     for (size_t i = 0; i < message.length(); ++i) {
       uint8_t value = static_cast<uint8_t>(message[i]) & 0x7F;
-      for (int b = 0; b < 7; ++b) {
-        bits.push_back(static_cast<uint8_t>((value >> b) & 0x1));
+      if (alphaBitOrder == AlphaBitOrder::kLsbFirst) {
+        for (int b = 0; b < 7; ++b) {
+          bits.push_back(static_cast<uint8_t>((value >> b) & 0x1));
+        }
+      } else {
+        for (int b = 6; b >= 0; --b) {
+          bits.push_back(static_cast<uint8_t>((value >> b) & 0x1));
+        }
       }
     }
     std::vector<uint32_t> words;
@@ -243,8 +255,8 @@ static void setIdleLine() {
   applyLineState(txIdleHigh);
 }
 
-static bool startTx(const std::vector<uint8_t> &bits, uint32_t baud, bool invert,
-                    bool idleHigh, OutputMode outputMode, bool odPullup,
+static bool startTx(const std::vector<uint8_t> &bits, uint32_t baud, float baudScale,
+                    bool invert, bool idleHigh, OutputMode outputMode, bool odPullup,
                     int dataGpio) {
   if (txActive) {
     setIdleLine();
@@ -265,7 +277,11 @@ static bool startTx(const std::vector<uint8_t> &bits, uint32_t baud, bool invert
   txOdPullup = odPullup;
   txGpio = dataGpio;
   setIdleLine();
-  uint32_t periodUs = 1000000UL / baud;
+  float nominal = 1000000.0f / static_cast<float>(baud);
+  uint32_t periodUs = static_cast<uint32_t>(lroundf(nominal * baudScale));
+  if (periodUs < 1) {
+    periodUs = 1;
+  }
   timerAlarmWrite(txTimer, periodUs, true);
   txActive = true;
   timerAlarmEnable(txTimer);
@@ -352,6 +368,20 @@ static bool parseOutputMode(const String &value, OutputMode &out) {
   return false;
 }
 
+static bool parseAlphaBitOrder(const String &value, AlphaBitOrder &out) {
+  String normalized = value;
+  normalized.toLowerCase();
+  if (normalized == "lsb_first") {
+    out = AlphaBitOrder::kLsbFirst;
+    return true;
+  }
+  if (normalized == "msb_first") {
+    out = AlphaBitOrder::kMsbFirst;
+    return true;
+  }
+  return false;
+}
+
 static void applyConfigPins() {
   txInvert = config.invert;
   txIdleHigh = config.idleHigh;
@@ -365,33 +395,55 @@ static bool applyPreset(const String &name, bool report) {
   String normalized = name;
   normalized.toLowerCase();
   if (normalized == "pager") {
-    config.output = OutputMode::kOpenDrain;
-    config.idleHigh = true;
+    config.baud = 512;
     config.invert = false;
-    config.preambleMs = 2000;
+    config.idleHigh = true;
+    config.output = OutputMode::kOpenDrain;
     config.odPullup = false;
-  } else if (normalized == "bench") {
-    config.output = OutputMode::kOpenDrain;
-    config.idleHigh = true;
-    config.invert = false;
     config.preambleMs = 2000;
-    config.odPullup = true;
-  } else if (normalized == "scope") {
+    config.capInd = 1422890;
+    config.capGrp = 1422890;
+    config.functionBits = 0;
+    config.alphaBitOrder = AlphaBitOrder::kLsbFirst;
+    config.baudScale = 1.0f;
+    config.frameGapMs = 60;
+    config.repeatPreambleEachFrame = true;
+  } else if (normalized == "lora_baseline") {
+    config.baud = 512;
+    config.invert = true;
+    config.idleHigh = true;
     config.output = OutputMode::kPushPull;
-    config.idleHigh = true;
-    config.invert = false;
+    config.odPullup = false;
     config.preambleMs = 2000;
-  } else if (normalized == "invert") {
-    config.invert = !config.invert;
+    config.functionBits = 2;
+    config.alphaBitOrder = AlphaBitOrder::kLsbFirst;
+    config.baudScale = 0.991f;
+    config.frameGapMs = 60;
+    config.repeatPreambleEachFrame = true;
+  } else if (normalized == "fast1200") {
+    config.baud = 1200;
+    config.invert = false;
+    config.idleHigh = true;
+    config.output = OutputMode::kOpenDrain;
+    config.odPullup = false;
+    config.preambleMs = 2000;
+    config.capInd = 1422890;
+    config.capGrp = 1422890;
+    config.functionBits = 0;
+    config.alphaBitOrder = AlphaBitOrder::kLsbFirst;
+    config.baudScale = 1.0f;
+    config.frameGapMs = 60;
+    config.repeatPreambleEachFrame = true;
   } else {
     if (report) {
-      Serial.println("ERR: preset must be pager|bench|scope|invert");
+      Serial.println("ERR: preset must be pager|lora_baseline|fast1200");
     }
     return false;
   }
   applyConfigPins();
   if (report) {
     Serial.printf("OK PRESET %s\n", normalized.c_str());
+    printStatus();
   }
   return true;
 }
@@ -415,9 +467,13 @@ static void writeConfigFile() {
   file.printf("  \"capGrp\": %u,\n", config.capGrp);
   file.printf("  \"functionBits\": %u,\n", config.functionBits);
   file.printf("  \"dataGpio\": %d,\n", config.dataGpio);
+  file.printf("  \"baudScale\": %.3f,\n", config.baudScale);
   file.printf("  \"frameGapMs\": %u,\n", config.frameGapMs);
   file.printf("  \"repeatPreambleEachFrame\": %s,\n",
               config.repeatPreambleEachFrame ? "true" : "false");
+  const char *alphaOrder =
+      (config.alphaBitOrder == AlphaBitOrder::kLsbFirst) ? "lsb_first" : "msb_first";
+  file.printf("  \"alphaBitOrder\": \"%s\",\n", alphaOrder);
   file.printf("  \"firstBootShown\": %s\n", config.firstBootShown ? "true" : "false");
   file.println("}");
   file.close();
@@ -480,6 +536,15 @@ static bool loadConfig() {
       config.dataGpio = 4;
     }
   }
+  if (extractJsonValue(json, "baudScale", value)) {
+    float scale = value.toFloat();
+    if (scale < 0.90f) {
+      scale = 0.90f;
+    } else if (scale > 1.10f) {
+      scale = 1.10f;
+    }
+    config.baudScale = scale;
+  }
   if (extractJsonValue(json, "frameGapMs", value)) {
     uint32_t gap = static_cast<uint32_t>(value.toInt());
     if (gap < kMinFrameGapMs) {
@@ -492,6 +557,9 @@ static bool loadConfig() {
   if (extractJsonValue(json, "repeatPreambleEachFrame", value)) {
     parseBool(value, config.repeatPreambleEachFrame);
   }
+  if (extractJsonValue(json, "alphaBitOrder", value)) {
+    parseAlphaBitOrder(value, config.alphaBitOrder);
+  }
   if (extractJsonValue(json, "firstBootShown", value)) {
     parseBool(value, config.firstBootShown);
   }
@@ -501,25 +569,17 @@ static bool loadConfig() {
 
 static void printStatus() {
   String outputMode = (config.output == OutputMode::kOpenDrain) ? "open_drain" : "push_pull";
+  const char *alphaOrder =
+      (config.alphaBitOrder == AlphaBitOrder::kLsbFirst) ? "lsb_first" : "msb_first";
   Serial.printf(
       "baud=%u invert=%s idleHigh=%s output=%s preambleMs=%u odPullup=%s bootPreset=%s "
-      "capInd=%u capGrp=%u functionBits=%u dataGpio=%d frameGapMs=%u repeatPreambleEachFrame=%s\n",
+      "capInd=%u capGrp=%u functionBits=%u dataGpio=%d baudScale=%.3f alphaBitOrder=%s "
+      "frameGapMs=%u repeatPreambleEachFrame=%s\n",
       config.baud, config.invert ? "true" : "false", config.idleHigh ? "true" : "false",
       outputMode.c_str(), config.preambleMs, config.odPullup ? "true" : "false",
       config.bootPreset.c_str(), config.capInd, config.capGrp, config.functionBits,
-      config.dataGpio, config.frameGapMs, config.repeatPreambleEachFrame ? "true" : "false");
-}
-
-static void printQuickHelp() {
-  Serial.println("Quick help:");
-  Serial.println("  STATUS | HELP | SCOPE <ms> | H | T1 <sec> | DIAG <msg> [capcode]");
-  Serial.println("  SET <key> <value> | SAVE | LOAD | ADDR <sec> [IND|GRP|BOTH]");
-  Serial.println("Examples:");
-  Serial.println("  STATUS");
-  Serial.println("  SCOPE 2000");
-  Serial.println("  H");
-  Serial.println("  T1 10");
-  Serial.println("  DIAG H");
+      config.dataGpio, config.baudScale, alphaOrder, config.frameGapMs,
+      config.repeatPreambleEachFrame ? "true" : "false");
 }
 
 static std::vector<uint8_t> buildAlternatingBits(uint32_t durationMs, uint32_t baud) {
@@ -537,9 +597,10 @@ static std::vector<uint8_t> buildAlternatingBits(uint32_t durationMs, uint32_t b
 
 static void sendMessageOnce(const String &message, uint32_t capcode) {
   std::vector<uint8_t> bits = encoder.buildBitstream(
-      capcode, config.functionBits, message, config.preambleMs, config.baud);
-  if (!startTx(bits, config.baud, config.invert, config.idleHigh, config.output, config.odPullup,
-               config.dataGpio)) {
+      capcode, config.functionBits, config.alphaBitOrder, message, config.preambleMs,
+      config.baud);
+  if (!startTx(bits, config.baud, config.baudScale, config.invert, config.idleHigh,
+               config.output, config.odPullup, config.dataGpio)) {
     Serial.println("BUSY");
     return;
   }
@@ -548,8 +609,8 @@ static void sendMessageOnce(const String &message, uint32_t capcode) {
 
 static void handleScope(uint32_t durationMs) {
   std::vector<uint8_t> bits = buildAlternatingBits(durationMs, config.baud);
-  if (!startTx(bits, config.baud, config.invert, config.idleHigh, config.output, config.odPullup,
-               config.dataGpio)) {
+  if (!startTx(bits, config.baud, config.baudScale, config.invert, config.idleHigh,
+               config.output, config.odPullup, config.dataGpio)) {
     Serial.println("BUSY");
     return;
   }
@@ -563,8 +624,8 @@ static void waitForTxAndGap() {
 }
 
 static bool startTxWithRetry(const std::vector<uint8_t> &bits) {
-  while (!startTx(bits, config.baud, config.invert, config.idleHigh, config.output, config.odPullup,
-                  config.dataGpio)) {
+  while (!startTx(bits, config.baud, config.baudScale, config.invert, config.idleHigh,
+                  config.output, config.odPullup, config.dataGpio)) {
     delay(5);
   }
   return true;
@@ -598,8 +659,8 @@ static void runMessageLoop(uint32_t seconds, const String &message, uint32_t cap
   while ((millis() - start) < (seconds * 1000UL)) {
     uint32_t preambleMs =
         (config.repeatPreambleEachFrame || first) ? config.preambleMs : 0;
-    std::vector<uint8_t> bits =
-        encoder.buildBitstream(capcode, config.functionBits, message, preambleMs, config.baud);
+    std::vector<uint8_t> bits = encoder.buildBitstream(
+        capcode, config.functionBits, config.alphaBitOrder, message, preambleMs, config.baud);
     startTxWithRetry(bits);
     waitForTxAndGap();
     first = false;
@@ -659,6 +720,19 @@ static void applySetCommand(const String &key, const String &value) {
     } else {
       config.dataGpio = 4;
     }
+  } else if (normalizedKey == "baudscale") {
+    float scale = value.toFloat();
+    if (scale < 0.90f) {
+      scale = 0.90f;
+    } else if (scale > 1.10f) {
+      scale = 1.10f;
+    }
+    config.baudScale = scale;
+  } else if (normalizedKey == "alphabitorder") {
+    if (!parseAlphaBitOrder(value, config.alphaBitOrder)) {
+      Serial.println("ERR: alphaBitOrder must be lsb_first or msb_first");
+      return;
+    }
   } else if (normalizedKey == "framegapms") {
     uint32_t gap = static_cast<uint32_t>(value.toInt());
     config.frameGapMs = clampFrameGap(gap);
@@ -674,33 +748,25 @@ static void applySetCommand(const String &key, const String &value) {
 }
 
 static void printHelp() {
-  String outputMode = (config.output == OutputMode::kOpenDrain) ? "open_drain" : "push_pull";
-  Serial.println("POCSAG TX ready.");
-  Serial.printf("Data pin: GPIO%d (XIAO D3 == GPIO4). baud=%u invert=%s idleHigh=%s output=%s preambleMs=%u\n",
-                config.dataGpio, config.baud, config.invert ? "true" : "false",
-                config.idleHigh ? "true" : "false", outputMode.c_str(), config.preambleMs);
   Serial.println("Commands:");
-  Serial.println("  STATUS                 - show current settings");
-  Serial.println("  SET <k> <v>            - change setting");
-  Serial.println("  SAVE / LOAD            - persist/restore config.json");
-  Serial.println("  H                      - send one test page \"H\" to capInd");
-  Serial.println("  T1 <sec>               - loop HELLO WORLD for <sec>");
-  Serial.println("  ADDR <sec> [IND|GRP|BOTH] - address-only loop");
-  Serial.println("  SCOPE <ms>             - output 1010 pattern for scope");
-  Serial.println("  DIAG <msg> [capcode]   - print generated codewords");
-  Serial.println("  HELP or ?              - show this menu");
+  Serial.println("  STATUS | HELP | ? | PRESET <name> | SCOPE <ms> | H | T1 <sec>");
+  Serial.println("  SET <key> <value> | SAVE | LOAD | ADDR <sec> [IND|GRP|BOTH]");
+  Serial.println("  DIAG <msg> [capcode]");
+  Serial.println("Presets: pager | lora_baseline | fast1200");
   Serial.println("SET keys: baud invert idleHigh output preambleMs capInd capGrp functionBits dataGpio");
-  Serial.println("          frameGapMs repeatPreambleEachFrame");
+  Serial.println("          baudScale alphaBitOrder frameGapMs repeatPreambleEachFrame");
   Serial.println("Examples:");
   Serial.println("  STATUS");
-  Serial.println("  SET baud 512");
-  Serial.println("  SET invert true");
+  Serial.println("  PRESET pager");
+  Serial.println("  PRESET lora_baseline");
   Serial.println("  SCOPE 2000");
-  Serial.println("  T1 10");
-  Serial.println("  ADDR 10 IND");
   Serial.println("  H");
-  Serial.println("  DIAG H");
+  Serial.println("  T1 10");
+  Serial.println("  SET invert true");
+  Serial.println("  SET functionBits 2");
+  Serial.println("  SET baudScale 0.991");
   Serial.println("  SAVE");
+  Serial.println("  LOAD");
 }
 
 static void handleCommand(const String &line) {
@@ -794,7 +860,8 @@ static void handleCommand(const String &line) {
         config.baud, config.invert ? "true" : "false", config.idleHigh ? "true" : "false",
         outputMode.c_str(), config.dataGpio, config.preambleMs, capcode, config.functionBits);
     Serial.printf("SYNC: %08lX\n", static_cast<unsigned long>(kSyncWord));
-    std::vector<uint32_t> batch = encoder.buildBatchWords(capcode, config.functionBits, message);
+    std::vector<uint32_t> batch =
+        encoder.buildBatchWords(capcode, config.functionBits, config.alphaBitOrder, message);
     for (size_t i = 0; i < batch.size(); ++i) {
       Serial.printf("W%02u: %08lX\n", static_cast<unsigned int>(i),
                     static_cast<unsigned long>(batch[i]));
@@ -827,10 +894,9 @@ void setup() {
     applyConfigPins();
   }
   setIdleLine();
-  Serial.println("POCSAG TX ready. Type HELP or ? for commands.");
-  printQuickHelp();
+  printStatus();
+  printHelp();
   if (!config.firstBootShown) {
-    printHelp();
     config.firstBootShown = true;
     writeConfigFile();
   }
