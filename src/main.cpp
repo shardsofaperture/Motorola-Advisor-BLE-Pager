@@ -739,16 +739,31 @@ static bool queueTxJob(const std::vector<uint8_t> &bits) {
 }
 
 static bool sendMessageOnce(const String &message, uint32_t capcode) {
+  waveTx.refreshBusy();
+  if (waveTx.isBusy()) {
+    Serial.println("TX_BUSY");
+    return false;
+  }
   std::vector<uint8_t> bits = buildRepeatedPocsagBits(message, capcode, config.preambleBits, 3000);
   return queueTxJob(bits);
 }
 
 static void handleScope(uint32_t durationMs) {
+  waveTx.refreshBusy();
+  if (waveTx.isBusy()) {
+    Serial.println("TX_BUSY");
+    return;
+  }
   std::vector<uint8_t> bits = buildAlternatingBits(durationMs, config.baud);
   queueTxJob(bits);
 }
 
 static void handleDebugScope() {
+  waveTx.refreshBusy();
+  if (waveTx.isBusy()) {
+    Serial.println("TX_BUSY");
+    return;
+  }
   std::vector<uint8_t> bits = buildAlternatingBits(2000, config.baud);
   std::vector<uint8_t> idleBits =
       buildIdleBits(2000, config.baud, config.driveOneLow, config.idleHigh);
@@ -757,6 +772,11 @@ static void handleDebugScope() {
 }
 
 static void handleSendMin(uint32_t capcode, uint8_t functionBits, uint32_t repeatMs) {
+  waveTx.refreshBusy();
+  if (waveTx.isBusy()) {
+    Serial.println("TX_BUSY");
+    return;
+  }
   std::vector<uint8_t> bits = buildRepeatedMinimalBits(capcode, functionBits, 2000, repeatMs);
   queueTxJob(bits);
 }
@@ -860,6 +880,7 @@ static void printHelp() {
 }
 
 static void handleCommand(const String &line) {
+  waveTx.refreshBusy();
   String trimmed = line;
   trimmed.trim();
   if (trimmed.length() == 0) {
@@ -1006,6 +1027,7 @@ void setup() {
 }
 
 void loop() {
+  waveTx.refreshBusy();
   static String lineBuffer;
   while (Serial.available() > 0) {
     char c = static_cast<char>(Serial.read());
