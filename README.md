@@ -53,3 +53,10 @@ output=push_pull.
 - `invertWords`
 - `driveOneLow`
 - `idleHigh`
+
+## Bluetooth (Android/Tasker)
+- Device name: `PagerBridge` (BLE GATT server advertises on boot).
+- Write commands by sending a full line ending in newline, e.g. `SEND HELLO\n`.
+- RX (write) characteristic UUID: `1b0ee9b4-e833-5a9e-354c-7e2d496b2b7f`
+- STATUS (read/notify) characteristic UUID: `1b0ee9b4-e833-5a9e-354c-7e2d4a6b2b7f`
+- Service UUID: `1b0ee9b4-e833-5a9e-354c-7e2d486b2b7f`

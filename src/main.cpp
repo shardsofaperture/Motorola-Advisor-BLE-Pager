@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <LittleFS.h>
+#include <NimBLEDevice.h>
 
 #include <vector>
 
@@ -14,6 +15,10 @@ constexpr uint32_t kSyncWord = 0x7CD215D8;
 constexpr uint32_t kIdleWord = 0x7A89C197;
 constexpr uint32_t kMaxRmtDuration = 32767;
 constexpr size_t kMaxRmtItems = 2000;
+constexpr size_t kMaxBleLineLength = 512;
+constexpr const char *kBleServiceUuid = "1b0ee9b4-e833-5a9e-354c-7e2d486b2b7f";
+constexpr const char *kBleRxUuid = "1b0ee9b4-e833-5a9e-354c-7e2d496b2b7f";
+constexpr const char *kBleStatusUuid = "1b0ee9b4-e833-5a9e-354c-7e2d4a6b2b7f";
 }
 
 enum class OutputMode : uint8_t { kOpenDrain = 0, kPushPull = 1 };
@@ -37,6 +42,7 @@ struct Config {
 static Config config;
 
 static void printStatus();
+static void handleCommand(const String &line);
 static void printErr(const char *tag, esp_err_t err) {
   if (err == ESP_OK) {
     return;
@@ -303,6 +309,47 @@ class PocsagEncoder {
 static PocsagEncoder encoder;
 static WaveTx waveTx;
 static volatile bool gWorkerBusy = false;
+static NimBLECharacteristic *gRxChar = nullptr;
+static NimBLECharacteristic *gStatusChar = nullptr;
+static String gBleLineBuf;
+
+class RxCallbacks : public NimBLECharacteristicCallbacks {
+ public:
+  void onWrite(NimBLECharacteristic *characteristic) override {
+    std::string value = characteristic->getValue();
+    for (unsigned char c : value) {
+      if (c == '\n' || c == '\r') {
+        if (gBleLineBuf.length() > 0) {
+          handleCommand(gBleLineBuf);
+          gBleLineBuf = "";
+        }
+        continue;
+      }
+      gBleLineBuf += static_cast<char>(c);
+      if (gBleLineBuf.length() > kMaxBleLineLength) {
+        gBleLineBuf = "";
+      }
+    }
+  }
+};
+
+static void bleInit() {
+  NimBLEDevice::init("PagerBridge");
+  NimBLEServer *server = NimBLEDevice::createServer();
+  NimBLEService *service = server->createService(kBleServiceUuid);
+  gRxChar = service->createCharacteristic(
+      kBleRxUuid, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
+  gRxChar->setCallbacks(new RxCallbacks());
+  gStatusChar = service->createCharacteristic(kBleStatusUuid,
+                                              NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
+  gStatusChar->setValue("READY\n");
+  service->start();
+  NimBLEAdvertising *advertising = NimBLEDevice::getAdvertising();
+  advertising->addServiceUUID(service->getUUID());
+  advertising->setScanResponse(true);
+  advertising->start();
+  gStatusChar->notify();
+}
 
 static void txWorkerTask(void *context) {
   (void)context;
@@ -316,6 +363,10 @@ static void txWorkerTask(void *context) {
                                   job->driveOneLow, true);
     gWorkerBusy = false;
     Serial.println(ok ? "TX_DONE" : "TX_FAIL");
+    if (gStatusChar) {
+      gStatusChar->setValue(ok ? "TX_DONE\n" : "TX_FAIL\n");
+      gStatusChar->notify();
+    }
     delete job;
   }
 }
@@ -978,6 +1029,7 @@ void setup() {
     applyConfigPins();
   }
   applyConfigPins();
+  bleInit();
   txQueue = xQueueCreate(2, sizeof(TxJob *));
   if (txQueue) {
     xTaskCreatePinnedToCore(txWorkerTask, "txWorker", 8192, nullptr, 1, nullptr, 0);
