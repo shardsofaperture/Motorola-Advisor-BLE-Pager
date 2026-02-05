@@ -16,6 +16,7 @@ constexpr uint32_t kIdleWord = 0x7A89C197;
 constexpr uint32_t kMaxRmtDuration = 32767;
 constexpr size_t kMaxRmtItems = 2000;
 constexpr size_t kMaxBleLineLength = 512;
+constexpr int kBleRxBlinkPin = 21;
 constexpr const char *kBleServiceUuid = "1b0ee9b4-e833-5a9e-354c-7e2d486b2b7f";
 constexpr const char *kBleRxUuid = "1b0ee9b4-e833-5a9e-354c-7e2d496b2b7f";
 constexpr const char *kBleStatusUuid = "1b0ee9b4-e833-5a9e-354c-7e2d4a6b2b7f";
@@ -311,24 +312,62 @@ static WaveTx waveTx;
 static volatile bool gWorkerBusy = false;
 static NimBLECharacteristic *gRxChar = nullptr;
 static NimBLECharacteristic *gStatusChar = nullptr;
-static String gBleLineBuf;
+
+class CommandParser {
+ public:
+  void handleInput(const std::string &input) {
+    for (unsigned char c : input) {
+      if (c == '\n' || c == '\r') {
+        if (lineBuf_.length() > 0) {
+          handleCommand(lineBuf_);
+          lineBuf_ = "";
+        }
+        continue;
+      }
+      lineBuf_ += static_cast<char>(c);
+      if (lineBuf_.length() > kMaxBleLineLength) {
+        lineBuf_ = "";
+      }
+    }
+  }
+
+ private:
+  String lineBuf_;
+};
+
+struct BleContext {
+  CommandParser *parser = nullptr;
+};
+
+static CommandParser gBleParser;
+static BleContext bleContext{&gBleParser};
 
 class RxCallbacks : public NimBLECharacteristicCallbacks {
  public:
   void onWrite(NimBLECharacteristic *characteristic) override {
     std::string value = characteristic->getValue();
+    static bool blinkState = false;
+    blinkState = !blinkState;
+    digitalWrite(kBleRxBlinkPin, blinkState ? HIGH : LOW);
+
+    String preview;
+    constexpr size_t kMaxPreview = 80;
+    preview.reserve(kMaxPreview);
     for (unsigned char c : value) {
-      if (c == '\n' || c == '\r') {
-        if (gBleLineBuf.length() > 0) {
-          handleCommand(gBleLineBuf);
-          gBleLineBuf = "";
-        }
-        continue;
+      if (preview.length() >= kMaxPreview) {
+        break;
       }
-      gBleLineBuf += static_cast<char>(c);
-      if (gBleLineBuf.length() > kMaxBleLineLength) {
-        gBleLineBuf = "";
+      if (c >= 32 && c <= 126) {
+        preview += static_cast<char>(c);
+      } else {
+        preview += '.';
       }
+    }
+    Serial.printf("BLE RX %u bytes: %s\n", static_cast<unsigned int>(value.size()),
+                  preview.c_str());
+
+    if (bleContext.parser) {
+      bleContext.parser->handleInput(value);
     }
   }
 };
@@ -1024,6 +1063,8 @@ static void handleCommand(const String &line) {
 void setup() {
   Serial.begin(115200);
   delay(100);
+  pinMode(kBleRxBlinkPin, OUTPUT);
+  digitalWrite(kBleRxBlinkPin, LOW);
   loadConfig();
   if (!applyPreset(config.bootPreset, false)) {
     applyConfigPins();
