@@ -73,6 +73,8 @@ class WaveTx {
       setIdleLine(gpio, output, idleHigh);
       return true;
     }
+    txStartMs_ = millis();
+    txTimeoutMs_ = static_cast<uint32_t>((bits.size() * 1000ULL) / baud) + 500;
     busy_ = true;
     esp_err_t err = rmt_write_items(channel_, items_.data(), items_.size(), false);
     if (err != ESP_OK) {
@@ -87,9 +89,10 @@ class WaveTx {
     err = rmt_wait_tx_done(channel_, pdMS_TO_TICKS(txMs));
     if (err != ESP_OK) {
       rmt_tx_stop(channel_);
+      rmt_driver_uninstall(channel_);
+      initialized_ = false;
       busy_ = false;
       setIdleLine(gpio, output, idleHigh);
-      Serial.println("ERR: RMT TX TIMEOUT");
       return false;
     }
     busy_ = false;
@@ -99,6 +102,15 @@ class WaveTx {
 
   bool refreshBusy() {
     if (!busy_ || !initialized_) {
+      return busy_;
+    }
+    if ((millis() - txStartMs_) > txTimeoutMs_) {
+      rmt_tx_stop(channel_);
+      rmt_driver_uninstall(channel_);
+      initialized_ = false;
+      busy_ = false;
+      setIdleLine(gpio_, output_, idleHigh_);
+      Serial.println("ERR: RMT STUCK, RESET");
       return busy_;
     }
     if (rmt_wait_tx_done(channel_, 0) == ESP_OK) {
@@ -194,6 +206,8 @@ class WaveTx {
   rmt_channel_t channel_ = RMT_CHANNEL_0;
   bool initialized_ = false;
   bool busy_ = false;
+  uint32_t txStartMs_ = 0;
+  uint32_t txTimeoutMs_ = 0;
   int gpio_ = -1;
   OutputMode output_ = OutputMode::kOpenDrain;
   bool idleHigh_ = true;
@@ -274,7 +288,7 @@ class PocsagEncoder {
 
   uint32_t crc(uint32_t msg21) const {
     uint32_t reg = msg21 << 10;
-    constexpr uint32_t poly = 0x3B9;
+    constexpr uint32_t poly = 0x769;
     for (int i = 30; i >= 10; --i) {
       if (reg & (1u << i)) {
         reg ^= (poly << (i - 10));
