@@ -3,6 +3,19 @@
 Deterministic POCSAG NRZ transmitter for ESP32-S3 using hardware-timed RMT output.
 Configuration lives in LittleFS at `/config.json`.
 
+## BLE GATT + nRF Connect quick test
+- Device name: `PagerBridge`
+- Service UUID: `1b0ee9b4-e833-5a9e-354c-7e2d486b2b7f`
+- RX (write) characteristic UUID: `1b0ee9b4-e833-5a9e-354c-7e2d496b2b7f`
+- Status (read/notify) characteristic UUID: `1b0ee9b4-e833-5a9e-354c-7e2d4a6b2b7f`
+
+Test flow (nRF Connect):
+1. Connect to `PagerBridge`.
+2. Write `PING` to the RX characteristic.
+3. Observe a status notify with `PONG\n`.
+4. Write `SEND 123456 0 test message` to the RX characteristic.
+5. Observe `TX_DONE` or `TX_FAIL` status notifications.
+
 ## How to wire
 - ESP32 GND → pager battery negative / ground
 - ESP32 GPIO (XIAO ESP32S3 **D3** / GPIO4) → 480 Ω series resistor → pager header pin 4
@@ -60,3 +73,4 @@ output=push_pull.
 - RX (write) characteristic UUID: `1b0ee9b4-e833-5a9e-354c-7e2d496b2b7f`
 - STATUS (read/notify) characteristic UUID: `1b0ee9b4-e833-5a9e-354c-7e2d4a6b2b7f`
 - Service UUID: `1b0ee9b4-e833-5a9e-354c-7e2d486b2b7f`
+- Use `PING` to receive `PONG\n` on the status characteristic.
