@@ -336,16 +336,21 @@ class CommandParser {
 };
 
 struct BleContext {
-  CommandParser *parser = nullptr;
+  CommandParser *parser;
+  explicit BleContext(CommandParser *p = nullptr) : parser(p) {}
 };
 
 static CommandParser gBleParser;
-static BleContext bleContext{&gBleParser};
+static BleContext bleContext(&gBleParser);
 
 class RxCallbacks : public NimBLECharacteristicCallbacks {
  public:
   void onWrite(NimBLECharacteristic *characteristic) override {
     std::string value = characteristic->getValue();
+    std::string input = value;
+    if (input.empty() || (input.back() != '\n' && input.back() != '\r')) {
+      input.push_back('\n');
+    }
     static bool blinkState = false;
     blinkState = !blinkState;
     digitalWrite(kBleRxBlinkPin, blinkState ? HIGH : LOW);
@@ -367,7 +372,7 @@ class RxCallbacks : public NimBLECharacteristicCallbacks {
                   preview.c_str());
 
     if (bleContext.parser) {
-      bleContext.parser->handleInput(value);
+      bleContext.parser->handleInput(input);
     }
   }
 };
@@ -951,6 +956,14 @@ static void handleCommand(const String &line) {
 
   if (cmd == "STATUS") {
     printStatus();
+    return;
+  }
+  if (cmd == "PING") {
+    if (gStatusChar) {
+      gStatusChar->setValue("PONG\n");
+      gStatusChar->notify();
+    }
+    Serial.println("PONG");
     return;
   }
   if (cmd == "STATUS_TX") {
