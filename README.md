@@ -74,3 +74,10 @@ output=push_pull.
 - STATUS (read/notify) characteristic UUID: `1b0ee9b4-e833-5a9e-354c-7e2d4a6b2b7f`
 - Service UUID: `1b0ee9b4-e833-5a9e-354c-7e2d486b2b7f`
 - Use `PING` to receive `PONG\n` on the status characteristic.
+
+## Android automation assets
+Android automation assets live in `android-tools/`.
+
+- Import the Tasker project export: `android-tools/tasker/SmstoPager.prj.xml`.
+- Required plugins/apps are documented in `android-tools/README.md`.
+- Variable definitions and debugging steps are in `android-tools/tasker/variables.md` and `android-tools/tasker/troubleshooting.md`.
