@@ -3,6 +3,23 @@
 Deterministic POCSAG NRZ transmitter for ESP32-S3 using hardware-timed RMT output.
 Configuration lives in LittleFS at `/config.json`.
 
+## Project roadmap (staged)
+This project is being delivered in stages to reduce risk and validate paging reliability early.
+
+### Stage 1: Advisor (current)
+- Focus: get the POCSAG NRZ path solid for the original Advisor pager.
+- Status: actively working the POCSAG code to send to the original Advisor.
+- Goal: prove the end-to-end transmit path and capture known-good settings.
+
+### Stage 2: Advisor II (next)
+- Focus: transfer the working POCSAG approach to the Advisor II hardware.
+- Status: once the Advisor (Stage 1) path is confirmed, adapt/validate for Advisor II.
+- Goal: establish a repeatable POCSAG baseline on Advisor II.
+
+### Stage 3: FLEX (later)
+- Focus: move from POCSAG to FLEX once the Advisor II baseline is stable.
+- Status: planned after POCSAG is verified on Advisor II.
+
 ## BLE GATT + nRF Connect quick test
 - Device name: `PagerBridge`
 - Service UUID: `1b0ee9b4-e833-5a9e-354c-7e2d486b2b7f`
