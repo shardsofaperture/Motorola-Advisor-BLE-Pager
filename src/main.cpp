@@ -312,6 +312,12 @@ static WaveTx waveTx;
 static volatile bool gWorkerBusy = false;
 static NimBLECharacteristic *gRxChar = nullptr;
 static NimBLECharacteristic *gStatusChar = nullptr;
+static std::string gLastBlePayload;
+static uint32_t gLastBlePayloadMs = 0;
+constexpr uint32_t kBleDedupeWindowMs = 1500;
+static String gLastSendLine;
+static uint32_t gLastSendLineMs = 0;
+constexpr uint32_t kSendDedupeWindowMs = 2000;
 
 class CommandParser {
  public:
@@ -347,6 +353,13 @@ class RxCallbacks : public NimBLECharacteristicCallbacks {
  public:
   void onWrite(NimBLECharacteristic *characteristic) override {
     std::string value = characteristic->getValue();
+    uint32_t now = millis();
+    if (value == gLastBlePayload && (now - gLastBlePayloadMs) < kBleDedupeWindowMs) {
+      Serial.println("DROP_DUP_BLE");
+      return;
+    }
+    gLastBlePayload = value;
+    gLastBlePayloadMs = now;
     std::string input = value;
     if (input.empty() || (input.back() != '\n' && input.back() != '\r')) {
       input.push_back('\n');
@@ -838,7 +851,7 @@ static bool queueTxJob(const std::vector<uint8_t> &bits) {
 }
 
 static bool sendMessageOnce(const String &message, uint32_t capcode) {
-  std::vector<uint8_t> bits = buildRepeatedPocsagBits(message, capcode, config.preambleBits, 3000);
+  std::vector<uint8_t> bits = buildPocsagBits(message, capcode, config.preambleBits);
   return queueTxJob(bits);
 }
 
@@ -967,6 +980,26 @@ static void handleCommand(const String &line) {
   int space = trimmed.indexOf(' ');
   String cmd = (space < 0) ? trimmed : trimmed.substring(0, space);
   cmd.toUpperCase();
+
+  if (cmd == "SEND") {
+    String msgOnly = (space < 0) ? "" : trimmed.substring(space + 1);
+    msgOnly.trim();
+    String key = msgOnly;
+    key.replace("\r", "");
+    key.replace("\n", "");
+    key.toLowerCase();
+    uint32_t now = millis();
+    if (key == gLastSendLine && (now - gLastSendLineMs) < kSendDedupeWindowMs) {
+      Serial.println("DROP_DUP_SEND");
+      if (gStatusChar) {
+        gStatusChar->setValue("DROP_DUP\n");
+        gStatusChar->notify();
+      }
+      return;
+    }
+    gLastSendLine = key;
+    gLastSendLineMs = now;
+  }
 
   if (cmd == "STATUS") {
     printStatus();
