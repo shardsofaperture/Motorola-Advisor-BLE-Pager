@@ -351,9 +351,6 @@ class RxCallbacks : public NimBLECharacteristicCallbacks {
     if (input.empty() || (input.back() != '\n' && input.back() != '\r')) {
       input.push_back('\n');
     }
-    static bool blinkState = false;
-    blinkState = !blinkState;
-    digitalWrite(kBleRxBlinkPin, blinkState ? HIGH : LOW);
 
     String preview;
     constexpr size_t kMaxPreview = 80;
@@ -377,9 +374,25 @@ class RxCallbacks : public NimBLECharacteristicCallbacks {
   }
 };
 
+class ServerCallbacks : public NimBLEServerCallbacks {
+ public:
+  void onConnect(NimBLEServer *server, ble_gap_conn_desc *desc) override {
+    (void)server;
+    NimBLEDevice::getAdvertising()->stop();
+    NimBLEDevice::updateConnParams(desc->conn_handle, 800, 800, 20, 600);
+  }
+
+  void onDisconnect(NimBLEServer *server) override {
+    (void)server;
+    NimBLEDevice::getAdvertising()->start();
+  }
+};
+
 static void bleInit() {
   NimBLEDevice::init("PagerBridge");
+  NimBLEDevice::setPower(ESP_PWR_LVL_N12);
   NimBLEServer *server = NimBLEDevice::createServer();
+  server->setCallbacks(new ServerCallbacks());
   NimBLEService *service = server->createService(kBleServiceUuid);
   gRxChar = service->createCharacteristic(
       kBleRxUuid, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
@@ -390,7 +403,9 @@ static void bleInit() {
   service->start();
   NimBLEAdvertising *advertising = NimBLEDevice::getAdvertising();
   advertising->addServiceUUID(service->getUUID());
-  advertising->setScanResponse(true);
+  advertising->setScanResponse(false);
+  advertising->setMinInterval(1600);
+  advertising->setMaxInterval(1600);
   advertising->start();
   gStatusChar->notify();
 }
@@ -1111,5 +1126,5 @@ void loop() {
       lineBuffer += c;
     }
   }
-  delay(2);
+  vTaskDelay(pdMS_TO_TICKS(50));
 }
