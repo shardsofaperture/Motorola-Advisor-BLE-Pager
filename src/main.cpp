@@ -15,6 +15,7 @@ constexpr uint32_t kSyncWord = 0x7CD215D8;
 constexpr uint32_t kIdleWord = 0x7A89C197;
 constexpr uint32_t kMaxRmtDuration = 32767;
 constexpr size_t kMaxRmtItems = 2000;
+constexpr size_t kMaxMessageBatches = 10;
 constexpr size_t kMaxBleLineLength = 512;
 constexpr int kBleRxBlinkPin = 21;
 constexpr const char *kBleServiceUuid = "1b0ee9b4-e833-5a9e-354c-7e2d486b2b7f";
@@ -209,9 +210,9 @@ class WaveTx {
 
 class PocsagEncoder {
  public:
-  std::vector<uint32_t> buildBatchWords(uint32_t capcode, uint8_t functionBits,
-                                        const String &message) const {
-    return buildSingleBatch(capcode, functionBits, message);
+  std::vector<std::vector<uint32_t>> buildBatchWords(uint32_t capcode, uint8_t functionBits,
+                                                     const String &message) const {
+    return buildAlphaBatches(capcode, functionBits, message);
   }
 
   uint32_t buildAddressCodeword(uint32_t capcode, uint8_t functionBits) const {
@@ -219,24 +220,40 @@ class PocsagEncoder {
   }
 
  private:
-  std::vector<uint32_t> buildSingleBatch(uint32_t capcode, uint8_t functionBits,
-                                         const String &message) const {
-    std::vector<uint32_t> words(16, kIdleWord);
+  std::vector<std::vector<uint32_t>> buildAlphaBatches(uint32_t capcode, uint8_t functionBits,
+                                                       const String &message) const {
+    std::vector<std::vector<uint32_t>> batches;
     uint8_t frame = static_cast<uint8_t>(capcode & 0x7);
     uint32_t addressWord = buildAddressWord(capcode, functionBits);
     std::vector<uint32_t> messageWords = buildAlphaWords(message);
 
+    std::vector<uint32_t> firstBatch(16, kIdleWord);
     size_t index = static_cast<size_t>(frame) * 2;
-    if (index < words.size()) {
-      words[index++] = addressWord;
+    if (index < firstBatch.size()) {
+      firstBatch[index++] = addressWord;
     }
-    for (uint32_t word : messageWords) {
-      if (index >= words.size()) {
+
+    size_t msgIndex = 0;
+    while (index < firstBatch.size() && msgIndex < messageWords.size()) {
+      firstBatch[index++] = messageWords[msgIndex++];
+    }
+    batches.push_back(firstBatch);
+
+    while (msgIndex < messageWords.size()) {
+      if (batches.size() >= kMaxMessageBatches) {
+        Serial.printf("WARN: message truncated to %u batches\n",
+                      static_cast<unsigned int>(kMaxMessageBatches));
         break;
       }
-      words[index++] = word;
+      std::vector<uint32_t> continuationBatch(16, kIdleWord);
+      size_t continuationIndex = 0;
+      while (continuationIndex < continuationBatch.size() && msgIndex < messageWords.size()) {
+        continuationBatch[continuationIndex++] = messageWords[msgIndex++];
+      }
+      batches.push_back(continuationBatch);
     }
-    return words;
+
+    return batches;
   }
 
   std::vector<uint32_t> buildAlphaWords(const String &message) const {
@@ -764,25 +781,24 @@ static uint32_t computeRepeatBatches(uint32_t repeatMs, uint32_t baud) {
 
 static std::vector<uint8_t> buildPocsagBits(const String &message, uint32_t capcode,
                                             uint32_t preambleBits) {
-  std::vector<uint32_t> words;
-  words.reserve(17);
   std::vector<uint8_t> bits;
   if (preambleBits > 0) {
+    bits.reserve(preambleBits);
     for (uint32_t i = 0; i < preambleBits; ++i) {
       bits.push_back(static_cast<uint8_t>(i % 2 == 0));
     }
   }
-  words = encoder.buildBatchWords(capcode, config.functionBits, message);
-  applyWordInversion(words, config.invertWords);
-  uint32_t syncWord = config.invertWords ? ~kSyncWord : kSyncWord;
-  for (int i = 31; i >= 0; --i) {
-    bits.push_back(static_cast<uint8_t>((syncWord >> i) & 0x1));
+
+  std::vector<std::vector<uint32_t>> batches =
+      encoder.buildBatchWords(capcode, config.functionBits, message);
+  bits.reserve(bits.size() + (batches.size() * 544));
+
+  for (std::vector<uint32_t> &batch : batches) {
+    applyWordInversion(batch, config.invertWords);
+    std::vector<uint8_t> batchBits = buildSyncAndBatchBits(batch, config.invertWords);
+    bits.insert(bits.end(), batchBits.begin(), batchBits.end());
   }
-  for (uint32_t word : words) {
-    for (int i = 31; i >= 0; --i) {
-      bits.push_back(static_cast<uint8_t>((word >> i) & 0x1));
-    }
-  }
+
   return bits;
 }
 
@@ -795,13 +811,21 @@ static std::vector<uint8_t> buildRepeatedPocsagBits(const String &message, uint3
       bits.push_back(static_cast<uint8_t>(i % 2 == 0));
     }
   }
-  std::vector<uint32_t> words = encoder.buildBatchWords(capcode, config.functionBits, message);
-  applyWordInversion(words, config.invertWords);
-  std::vector<uint8_t> batchBits = buildSyncAndBatchBits(words, config.invertWords);
+
+  std::vector<uint8_t> oneMessageBits;
+  std::vector<std::vector<uint32_t>> batches =
+      encoder.buildBatchWords(capcode, config.functionBits, message);
+  oneMessageBits.reserve(batches.size() * 544);
+  for (std::vector<uint32_t> &batch : batches) {
+    applyWordInversion(batch, config.invertWords);
+    std::vector<uint8_t> batchBits = buildSyncAndBatchBits(batch, config.invertWords);
+    oneMessageBits.insert(oneMessageBits.end(), batchBits.begin(), batchBits.end());
+  }
+
   uint32_t totalBatches = computeRepeatBatches(repeatMs, config.baud);
-  bits.reserve(bits.size() + (batchBits.size() * totalBatches));
+  bits.reserve(bits.size() + (oneMessageBits.size() * totalBatches));
   for (uint32_t i = 0; i < totalBatches; ++i) {
-    bits.insert(bits.end(), batchBits.begin(), batchBits.end());
+    bits.insert(bits.end(), oneMessageBits.begin(), oneMessageBits.end());
   }
   return bits;
 }
