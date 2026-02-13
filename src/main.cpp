@@ -56,6 +56,7 @@ struct Config {
 static Config config;
 
 static void printStatus();
+static void printPowerStatus();
 static void handleCommand(const String &line);
 static void notifyStatus(const char *status, bool alwaysNotify);
 static void printErr(const char *tag, esp_err_t err) {
@@ -76,6 +77,9 @@ struct TxJob {
 
 static QueueHandle_t txQueue = nullptr;
 static QueueHandle_t commandQueue = nullptr;
+static bool gPmConfigured = false;
+static esp_err_t gPmConfigureErr = ESP_FAIL;
+static volatile bool gPmNoLightSleepHeld = false;
 
 class WaveTx {
  public:
@@ -193,7 +197,11 @@ class WaveTx {
       esp_err_t err = esp_pm_lock_acquire(pmNoLightSleepLock_);
       if (err != ESP_OK) {
         printErr("esp_pm_lock_acquire", err);
+      } else {
+        gPmNoLightSleepHeld = true;
       }
+    } else {
+      gPmNoLightSleepHeld = false;
     }
 #endif
   }
@@ -204,8 +212,14 @@ class WaveTx {
       esp_err_t err = esp_pm_lock_release(pmNoLightSleepLock_);
       if (err != ESP_OK) {
         printErr("esp_pm_lock_release", err);
+      } else {
+        gPmNoLightSleepHeld = false;
       }
+    } else {
+      gPmNoLightSleepHeld = false;
     }
+#else
+    gPmNoLightSleepHeld = false;
 #endif
   }
 
@@ -615,15 +629,45 @@ static void setupPowerManagement() {
   pmConfig.max_freq_mhz = 80;
   pmConfig.min_freq_mhz = 20;
   pmConfig.light_sleep_enable = true;
-  esp_err_t err = esp_pm_configure(&pmConfig);
-  if (err == ESP_OK) {
+  gPmConfigureErr = esp_pm_configure(&pmConfig);
+  gPmConfigured = (gPmConfigureErr == ESP_OK);
+  if (gPmConfigured) {
     Serial.println("PM: enabled DFS/light sleep");
   } else {
-    Serial.printf("PM: not available (0x%X)\n", static_cast<unsigned int>(err));
+    Serial.printf("PM: not available (0x%X)\n", static_cast<unsigned int>(gPmConfigureErr));
   }
 #else
+  gPmConfigureErr = ESP_FAIL;
+  gPmConfigured = false;
   Serial.println("PM: not available");
 #endif
+}
+
+static void printPowerStatus() {
+  Serial.println("PM STATUS:");
+#if HAS_ESP_PM && defined(CONFIG_PM_ENABLE)
+  Serial.printf("  compiled: yes (CONFIG_PM_ENABLE)\n");
+  Serial.printf("  configured: %s (err=0x%X)\n", gPmConfigured ? "yes" : "no",
+                static_cast<unsigned int>(gPmConfigureErr));
+
+  esp_pm_config_t cur = {};
+  esp_err_t ge = esp_pm_get_configuration(&cur);
+  if (ge == ESP_OK) {
+    Serial.printf("  current: max_freq_mhz=%d min_freq_mhz=%d light_sleep_enable=%s\n",
+                  static_cast<int>(cur.max_freq_mhz), static_cast<int>(cur.min_freq_mhz),
+                  cur.light_sleep_enable ? "true" : "false");
+  } else {
+    Serial.printf("  current: esp_pm_get_configuration failed (0x%X)\n",
+                  static_cast<unsigned int>(ge));
+  }
+#else
+  Serial.println("  compiled: no (CONFIG_PM_ENABLE not set or esp_pm.h missing)");
+#endif
+
+  Serial.printf("  tx_no_light_sleep_lock_held: %s\n", gPmNoLightSleepHeld ? "true" : "false");
+  Serial.printf("  ble_connected: %s\n", gBleConnected ? "true" : "false");
+  bool txBusy = gWorkerBusy || (txQueue && uxQueueMessagesWaiting(txQueue) > 0);
+  Serial.printf("  tx_busy: %s\n", txBusy ? "true" : "false");
 }
 
 static void bleInit() {
@@ -1240,7 +1284,7 @@ static void applySetCommand(const String &key, const String &value) {
 static void printHelp() {
   Serial.println("POCSAG TX (RMT) Commands:");
   Serial.println(
-      "  STATUS | HELP | ? | PRESET <name> | SCOPE <ms> | DEBUG_SCOPE | H | SEND <text> | "
+      "  STATUS | PM | HELP | ? | PRESET <name> | SCOPE <ms> | DEBUG_SCOPE | H | SEND <text> | "
       "SEND_MIN <capcode> [func] [repeatMs] | DUMP_MIN <capcode> <func> | STATUS_TX | T1 <sec>");
   Serial.println("  SET <key> <value> | SAVE | LOAD");
   Serial.println("Presets: ADVISOR | GENERIC");
@@ -1303,6 +1347,10 @@ static void handleCommand(const String &line) {
 
   if (cmd == "STATUS") {
     printStatus();
+    return;
+  }
+  if (cmd == "PM") {
+    printPowerStatus();
     return;
   }
   if (cmd == "PING") {
