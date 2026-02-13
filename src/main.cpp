@@ -5,6 +5,12 @@
 #include <vector>
 
 #include "driver/rmt.h"
+#if __has_include("esp_pm.h")
+#include "esp_pm.h"
+#define HAS_ESP_PM 1
+#else
+#define HAS_ESP_PM 0
+#endif
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
@@ -17,6 +23,8 @@ constexpr uint32_t kMaxRmtDuration = 32767;
 constexpr size_t kMaxRmtItems = 2000;
 constexpr size_t kMaxMessageBatches = 10;
 constexpr size_t kMaxBleLineLength = 512;
+constexpr uint32_t kCommandWarmupWindowMs = 150;
+constexpr uint32_t kCommandWarmupDelayMs = 250;
 constexpr int kBleRxBlinkPin = 21;
 constexpr const char *kBleServiceUuid = "1b0ee9b4-e833-5a9e-354c-7e2d486b2b7f";
 constexpr const char *kBleRxUuid = "1b0ee9b4-e833-5a9e-354c-7e2d496b2b7f";
@@ -62,6 +70,7 @@ struct TxJob {
 };
 
 static QueueHandle_t txQueue = nullptr;
+static QueueHandle_t commandQueue = nullptr;
 
 class WaveTx {
  public:
@@ -82,11 +91,6 @@ class WaveTx {
       setIdleLine(gpio, output, idleHigh);
       return true;
     }
-    if (initialized_) {
-      rmt_tx_stop(channel_);
-      rmt_driver_uninstall(channel_);
-      initialized_ = false;
-    }
     if (!ensureConfig(gpio, output, idleHigh)) {
       return false;
     }
@@ -95,8 +99,6 @@ class WaveTx {
     esp_err_t err = rmt_write_items(channel_, items_.data(), items_.size(), true);
     printErr("rmt_write_items", err);
     rmt_tx_stop(channel_);
-    rmt_driver_uninstall(channel_);
-    initialized_ = false;
     setIdleLine(gpio, output, idleHigh);
     if (err != ESP_OK) {
       busy_ = false;
@@ -327,6 +329,8 @@ class PocsagEncoder {
 static PocsagEncoder encoder;
 static WaveTx waveTx;
 static volatile bool gWorkerBusy = false;
+static bool gBleConnected = false;
+static uint32_t gBleConnectedAtMs = 0;
 static NimBLECharacteristic *gRxChar = nullptr;
 static NimBLECharacteristic *gStatusChar = nullptr;
 static std::string gLastBlePayload;
@@ -336,26 +340,75 @@ static String gLastSendLine;
 static uint32_t gLastSendLineMs = 0;
 constexpr uint32_t kSendDedupeWindowMs = 2000;
 
+struct CommandJob {
+  String line;
+  uint32_t notBeforeMs;
+};
+
+static String gLastStatus;
+
+static void notifyStatus(const char *status, bool alwaysNotify = false) {
+  if (!status || !gStatusChar) {
+    return;
+  }
+  String normalized = String(status);
+  normalized.trim();
+  if (!alwaysNotify && normalized == gLastStatus) {
+    return;
+  }
+  gLastStatus = normalized;
+  String payload = normalized + "\n";
+  gStatusChar->setValue(payload.c_str());
+  if (gBleConnected) {
+    gStatusChar->notify();
+  }
+}
+
+static bool enqueueCommand(const String &line, uint32_t notBeforeMs = 0) {
+  if (!commandQueue) {
+    Serial.println("ERR: CMD_QUEUE");
+    notifyStatus("ERR:CMD_QUEUE", true);
+    return false;
+  }
+  CommandJob *job = new CommandJob{line, notBeforeMs};
+  if (xQueueSend(commandQueue, &job, 0) != pdTRUE) {
+    delete job;
+    Serial.println("ERR: CMD_QUEUE_FULL");
+    notifyStatus("ERR:CMD_QUEUE_FULL", true);
+    return false;
+  }
+  return true;
+}
+
 class CommandParser {
  public:
-  void handleInput(const std::string &input) {
+  void handleInput(const std::string &input, uint32_t notBeforeMs = 0) {
     for (unsigned char c : input) {
       if (c == '\n' || c == '\r') {
-        if (lineBuf_.length() > 0) {
-          handleCommand(lineBuf_);
+        if (!overflowed_ && lineBuf_.length() > 0) {
+          enqueueCommand(lineBuf_, notBeforeMs);
+        } else if (overflowed_) {
+          notifyStatus("ERR:LINE_TOO_LONG", true);
           lineBuf_ = "";
+          overflowed_ = false;
         }
         continue;
       }
-      lineBuf_ += static_cast<char>(c);
-      if (lineBuf_.length() > kMaxBleLineLength) {
-        lineBuf_ = "";
+      if (overflowed_) {
+        continue;
       }
+      if (lineBuf_.length() >= kMaxBleLineLength) {
+        overflowed_ = true;
+        Serial.println("ERR: BLE command line too long");
+        continue;
+      }
+      lineBuf_ += static_cast<char>(c);
     }
   }
 
  private:
   String lineBuf_;
+  bool overflowed_ = false;
 };
 
 struct BleContext {
@@ -399,7 +452,12 @@ class RxCallbacks : public NimBLECharacteristicCallbacks {
                   preview.c_str());
 
     if (bleContext.parser) {
-      bleContext.parser->handleInput(input);
+      uint32_t delayUntilMs = 0;
+      uint32_t elapsedSinceConnect = now - gBleConnectedAtMs;
+      if (gBleConnected && elapsedSinceConnect < kCommandWarmupWindowMs) {
+        delayUntilMs = gBleConnectedAtMs + kCommandWarmupDelayMs;
+      }
+      bleContext.parser->handleInput(input, delayUntilMs);
     }
   }
 };
@@ -407,15 +465,39 @@ class RxCallbacks : public NimBLECharacteristicCallbacks {
 class ServerCallbacks : public NimBLEServerCallbacks {
  public:
   void onConnect(NimBLEServer *server, ble_gap_conn_desc *desc) override {
+    gBleConnected = true;
+    gBleConnectedAtMs = millis();
+    Serial.println("BLE: connected");
+    notifyStatus("CONNECTED", true);
     NimBLEDevice::getAdvertising()->stop();
-    server->updateConnParams(desc->conn_handle, 800, 800, 20, 600);
+    server->updateConnParams(desc->conn_handle, 800, 800, 4, 600);
   }
 
   void onDisconnect(NimBLEServer *server) override {
     (void)server;
+    gBleConnected = false;
+    Serial.println("BLE: disconnected");
+    notifyStatus("READY", true);
     NimBLEDevice::getAdvertising()->start();
   }
 };
+
+static void setupPowerManagement() {
+#if HAS_ESP_PM
+  esp_pm_config_t pmConfig = {};
+  pmConfig.max_freq_mhz = 80;
+  pmConfig.min_freq_mhz = 20;
+  pmConfig.light_sleep_enable = true;
+  esp_err_t err = esp_pm_configure(&pmConfig);
+  if (err == ESP_OK) {
+    Serial.println("PM: enabled DFS/light sleep");
+  } else {
+    Serial.printf("PM: not available (0x%X)\n", static_cast<unsigned int>(err));
+  }
+#else
+  Serial.println("PM: not available");
+#endif
+}
 
 static void bleInit() {
   NimBLEDevice::init("PagerBridge");
@@ -433,10 +515,10 @@ static void bleInit() {
   NimBLEAdvertising *advertising = NimBLEDevice::getAdvertising();
   advertising->addServiceUUID(service->getUUID());
   advertising->setScanResponse(false);
-  advertising->setMinInterval(1600);
-  advertising->setMaxInterval(1600);
+  advertising->setMinInterval(3200);
+  advertising->setMaxInterval(8000);
   advertising->start();
-  gStatusChar->notify();
+  notifyStatus("READY", true);
 }
 
 static void txWorkerTask(void *context) {
@@ -451,10 +533,23 @@ static void txWorkerTask(void *context) {
                                   job->driveOneLow, true);
     gWorkerBusy = false;
     Serial.println(ok ? "TX_DONE" : "TX_FAIL");
-    if (gStatusChar) {
-      gStatusChar->setValue(ok ? "TX_DONE\n" : "TX_FAIL\n");
-      gStatusChar->notify();
+    notifyStatus(ok ? "TX_DONE" : "TX_FAIL", true);
+    delete job;
+  }
+}
+
+static void commandWorkerTask(void *context) {
+  (void)context;
+  while (true) {
+    CommandJob *job = nullptr;
+    if (xQueueReceive(commandQueue, &job, portMAX_DELAY) != pdTRUE || job == nullptr) {
+      continue;
     }
+    uint32_t now = millis();
+    if (job->notBeforeMs != 0 && static_cast<int32_t>(job->notBeforeMs - now) > 0) {
+      vTaskDelay(pdMS_TO_TICKS(job->notBeforeMs - now));
+    }
+    handleCommand(job->line);
     delete job;
   }
 }
@@ -861,6 +956,7 @@ static bool queueTxJob(const std::vector<uint8_t> &bits) {
   }
   if (gWorkerBusy || uxQueueSpacesAvailable(txQueue) == 0) {
     Serial.println("TX_BUSY");
+    notifyStatus("TX_BUSY", true);
     return false;
   }
   TxJob *job = new TxJob{bits, config.baud, config.dataGpio, config.output, config.idleHigh,
@@ -868,10 +964,54 @@ static bool queueTxJob(const std::vector<uint8_t> &bits) {
   if (xQueueSend(txQueue, &job, 0) != pdTRUE) {
     delete job;
     Serial.println("TX_BUSY");
+    notifyStatus("TX_BUSY", true);
     return false;
   }
   Serial.println("QUEUED");
+  notifyStatus("TX_BUSY", true);
   return true;
+}
+
+static bool isLikelyMessageId(const String &token) {
+  if (token.startsWith("id:") || token.startsWith("ID:")) {
+    return true;
+  }
+  if (token.length() == 0 || token.length() > 24) {
+    return false;
+  }
+  for (size_t i = 0; i < token.length(); ++i) {
+    if (!isAlphaNumeric(static_cast<unsigned char>(token[i])) && token[i] != '-' &&
+        token[i] != '_') {
+      return false;
+    }
+  }
+  bool hasDigit = false;
+  for (size_t i = 0; i < token.length(); ++i) {
+    if (isDigit(static_cast<unsigned char>(token[i]))) {
+      hasDigit = true;
+      break;
+    }
+  }
+  return hasDigit;
+}
+
+static String normalizeWhitespaceLower(const String &input) {
+  String out;
+  bool prevSpace = false;
+  for (size_t i = 0; i < input.length(); ++i) {
+    char c = input[i];
+    if (isspace(static_cast<unsigned char>(c))) {
+      if (!prevSpace && out.length() > 0) {
+        out += ' ';
+      }
+      prevSpace = true;
+      continue;
+    }
+    prevSpace = false;
+    out += static_cast<char>(tolower(static_cast<unsigned char>(c)));
+  }
+  out.trim();
+  return out;
 }
 
 static bool sendMessageOnce(const String &message, uint32_t capcode) {
@@ -1008,17 +1148,21 @@ static void handleCommand(const String &line) {
   if (cmd == "SEND") {
     String msgOnly = (space < 0) ? "" : trimmed.substring(space + 1);
     msgOnly.trim();
-    String key = msgOnly;
-    key.replace("\r", "");
-    key.replace("\n", "");
-    key.toLowerCase();
+    int secondSpace = msgOnly.indexOf(' ');
+    String firstToken = (secondSpace < 0) ? msgOnly : msgOnly.substring(0, secondSpace);
+    String remainder = (secondSpace < 0) ? "" : msgOnly.substring(secondSpace + 1);
+    remainder.trim();
+
+    String key;
+    if (secondSpace > 0 && remainder.length() > 0 && isLikelyMessageId(firstToken)) {
+      key = String("id:") + normalizeWhitespaceLower(firstToken);
+    } else {
+      key = String("msg:") + normalizeWhitespaceLower(msgOnly);
+    }
     uint32_t now = millis();
     if (key == gLastSendLine && (now - gLastSendLineMs) < kSendDedupeWindowMs) {
       Serial.println("DROP_DUP_SEND");
-      if (gStatusChar) {
-        gStatusChar->setValue("DROP_DUP\n");
-        gStatusChar->notify();
-      }
+      notifyStatus("DROP_DUP", true);
       return;
     }
     gLastSendLine = key;
@@ -1030,10 +1174,7 @@ static void handleCommand(const String &line) {
     return;
   }
   if (cmd == "PING") {
-    if (gStatusChar) {
-      gStatusChar->setValue("PONG\n");
-      gStatusChar->notify();
-    }
+    notifyStatus("CONNECTED", true);
     Serial.println("PONG");
     return;
   }
@@ -1150,16 +1291,23 @@ void setup() {
   pinMode(kBleRxBlinkPin, OUTPUT);
   digitalWrite(kBleRxBlinkPin, LOW);
   loadConfig();
+  setupPowerManagement();
   if (!applyPreset(config.bootPreset, false)) {
     applyConfigPins();
   }
   applyConfigPins();
   bleInit();
-  txQueue = xQueueCreate(2, sizeof(TxJob *));
+  txQueue = xQueueCreate(4, sizeof(TxJob *));
+  commandQueue = xQueueCreate(8, sizeof(CommandJob *));
   if (txQueue) {
     xTaskCreatePinnedToCore(txWorkerTask, "txWorker", 8192, nullptr, 1, nullptr, 0);
   } else {
     Serial.println("ERR: TX_QUEUE_CREATE");
+  }
+  if (commandQueue) {
+    xTaskCreatePinnedToCore(commandWorkerTask, "cmdWorker", 6144, nullptr, 1, nullptr, 1);
+  } else {
+    Serial.println("ERR: CMD_QUEUE_CREATE");
   }
   printStatus();
   printHelp();
@@ -1169,18 +1317,28 @@ void setup() {
   }
 }
 
+// Manual acceptance tests:
+// 1) Connect phone, then send 20 random-spaced "SEND <text>" commands.
+//    Expect TX_DONE for each, no first-write loss after reconnect.
+// 2) With phone screen closed, trigger Tasker BLE write.
+//    Expect BLE RX log and TX_DONE within a couple of seconds.
+// 3) Measure current draw in two states:
+//    a) disconnected (slow advertising active), b) connected idle.
+//    Expect lower average current than previous 50 ms polling build.
+// 4) Send multiple messages and inspect serial logs:
+//    Expect no per-message rmt_driver_install/uninstall churn.
 void loop() {
   static String lineBuffer;
   while (Serial.available() > 0) {
     char c = static_cast<char>(Serial.read());
     if (c == '\n' || c == '\r') {
       if (lineBuffer.length() > 0) {
-        handleCommand(lineBuffer);
+        enqueueCommand(lineBuffer);
         lineBuffer = "";
       }
     } else {
       lineBuffer += c;
     }
   }
-  vTaskDelay(pdMS_TO_TICKS(50));
+  vTaskDelay(pdMS_TO_TICKS(1000));
 }
