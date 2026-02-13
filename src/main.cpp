@@ -483,7 +483,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
 };
 
 static void setupPowerManagement() {
-#if HAS_ESP_PM
+#if HAS_ESP_PM && defined(CONFIG_PM_ENABLE)
   esp_pm_config_t pmConfig = {};
   pmConfig.max_freq_mhz = 80;
   pmConfig.min_freq_mhz = 20;
