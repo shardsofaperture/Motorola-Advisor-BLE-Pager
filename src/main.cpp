@@ -20,12 +20,15 @@ constexpr const char *kConfigPath = "/config.json";
 constexpr uint32_t kSyncWord = 0x7CD215D8;
 constexpr uint32_t kIdleWord = 0x7A89C197;
 constexpr uint32_t kMaxRmtDuration = 32767;
-constexpr size_t kMaxRmtItems = 2000;
+constexpr size_t kMaxRmtItems = 10000;
 constexpr size_t kMaxMessageBatches = 10;
 constexpr size_t kMaxBleLineLength = 512;
 constexpr uint32_t kCommandWarmupWindowMs = 150;
 constexpr uint32_t kCommandWarmupDelayMs = 250;
-constexpr int kBleRxBlinkPin = 21;
+constexpr int kUserLedPin = 21;
+constexpr TickType_t kBootLedOnTicks = pdMS_TO_TICKS(5000);
+constexpr TickType_t kHeartbeatPeriodTicks = pdMS_TO_TICKS(15000);
+constexpr TickType_t kHeartbeatPulseTicks = pdMS_TO_TICKS(15);
 constexpr const char *kBleServiceUuid = "1b0ee9b4-e833-5a9e-354c-7e2d486b2b7f";
 constexpr const char *kBleRxUuid = "1b0ee9b4-e833-5a9e-354c-7e2d496b2b7f";
 constexpr const char *kBleStatusUuid = "1b0ee9b4-e833-5a9e-354c-7e2d4a6b2b7f";
@@ -53,6 +56,7 @@ static Config config;
 
 static void printStatus();
 static void handleCommand(const String &line);
+static void notifyStatus(const char *status, bool alwaysNotify);
 static void printErr(const char *tag, esp_err_t err) {
   if (err == ESP_OK) {
     return;
@@ -87,6 +91,12 @@ class WaveTx {
     }
     uint32_t bitPeriodUs = (1000000 + (baud / 2)) / baud;
     buildItems(bits, bitPeriodUs, driveOneLow);
+    if (overflowed_) {
+      Serial.println("ERR: RMT_ITEMS_OVERFLOW");
+      notifyStatus("TX_TOO_LONG", true);
+      setIdleLine(gpio, output, idleHigh);
+      return false;
+    }
     if (items_.empty()) {
       setIdleLine(gpio, output, idleHigh);
       return true;
@@ -94,21 +104,91 @@ class WaveTx {
     if (!ensureConfig(gpio, output, idleHigh)) {
       return false;
     }
+
     busy_ = true;
-    (void)blockingTx;
-    esp_err_t err = rmt_write_items(channel_, items_.data(), items_.size(), true);
+    acquirePmLock();
+
+    bool ok = true;
+    esp_err_t err = rmt_write_items(channel_, items_.data(), items_.size(), false);
     printErr("rmt_write_items", err);
-    rmt_tx_stop(channel_);
-    setIdleLine(gpio, output, idleHigh);
     if (err != ESP_OK) {
-      busy_ = false;
-      return false;
+      ok = false;
     }
+
+    if (ok && blockingTx) {
+      const TickType_t timeoutTicks = computeTimeoutTicks(bits.size(), baud, true);
+      err = rmt_wait_tx_done(channel_, timeoutTicks);
+      if (err == ESP_ERR_TIMEOUT) {
+        Serial.println("ERR: RMT_TX_TIMEOUT");
+        ok = false;
+      } else {
+        printErr("rmt_wait_tx_done", err);
+        ok = (err == ESP_OK);
+      }
+    } else if (ok) {
+      const TickType_t timeoutTicks = computeTimeoutTicks(bits.size(), baud, false);
+      err = rmt_wait_tx_done(channel_, timeoutTicks);
+      if (err != ESP_OK && err != ESP_ERR_TIMEOUT) {
+        printErr("rmt_wait_tx_done", err);
+      }
+    }
+
+    if (!ok) {
+      rmt_tx_stop(channel_);
+    }
+    setIdleLine(gpio, output, idleHigh);
+
+    releasePmLock();
     busy_ = false;
-    return true;
+    return ok;
   }
 
  private:
+  static TickType_t computeTimeoutTicks(size_t bitCount, uint32_t baud, bool blockingTx) {
+    if (baud == 0) {
+      return pdMS_TO_TICKS(6000);
+    }
+    uint64_t txMs = (static_cast<uint64_t>(bitCount) * 1000ULL) / static_cast<uint64_t>(baud);
+    txMs += blockingTx ? 250ULL : 50ULL;
+    if (txMs > 6000ULL) {
+      txMs = 6000ULL;
+    }
+    if (txMs == 0ULL) {
+      txMs = 1ULL;
+    }
+    return pdMS_TO_TICKS(static_cast<uint32_t>(txMs));
+  }
+
+  void acquirePmLock() {
+#if HAS_ESP_PM && defined(CONFIG_PM_ENABLE)
+    if (!pmLockInitialized_) {
+      esp_err_t err =
+          esp_pm_lock_create(ESP_PM_NO_LIGHT_SLEEP, 0, "rmt_tx", &pmNoLightSleepLock_);
+      if (err != ESP_OK) {
+        pmNoLightSleepLock_ = nullptr;
+      }
+      pmLockInitialized_ = true;
+    }
+    if (pmNoLightSleepLock_) {
+      esp_err_t err = esp_pm_lock_acquire(pmNoLightSleepLock_);
+      if (err != ESP_OK) {
+        printErr("esp_pm_lock_acquire", err);
+      }
+    }
+#endif
+  }
+
+  void releasePmLock() {
+#if HAS_ESP_PM && defined(CONFIG_PM_ENABLE)
+    if (pmNoLightSleepLock_) {
+      esp_err_t err = esp_pm_lock_release(pmNoLightSleepLock_);
+      if (err != ESP_OK) {
+        printErr("esp_pm_lock_release", err);
+      }
+    }
+#endif
+  }
+
   bool ensureConfig(int gpio, OutputMode output, bool idleHigh) {
     if (initialized_ && gpio == gpio_ && output == output_ && idleHigh == idleHigh_) {
       return true;
@@ -146,13 +226,8 @@ class WaveTx {
   }
 
   void buildItems(const std::vector<uint8_t> &bits, uint32_t bitPeriodUs, bool driveOneLow) {
-    // RMT timing note:
-    // - With clk_div=80, each RMT tick is 1 us (80 MHz / 80).
-    // - At 512 bps, bitPeriodUs is 1953 us. Each bit is represented by a single
-    //   constant-level item whose duration equals the bit period.
-    // - driveOneLow=true inverts the NRZ line mapping (bit=1 -> low, bit=0 -> high).
-    // - idleHigh configures the idle line state after the RMT stream completes.
     items_.clear();
+    overflowed_ = false;
     if (bits.empty()) {
       return;
     }
@@ -181,8 +256,7 @@ class WaveTx {
         }
         items_.push_back(item);
         if (items_.size() > kMaxRmtItems) {
-          Serial.printf("ERR: items too many: %u\n",
-                        static_cast<unsigned int>(items_.size()));
+          overflowed_ = true;
           items_.clear();
           return;
         }
@@ -204,9 +278,14 @@ class WaveTx {
   rmt_channel_t channel_ = RMT_CHANNEL_0;
   bool initialized_ = false;
   bool busy_ = false;
+  bool overflowed_ = false;
   int gpio_ = -1;
   OutputMode output_ = OutputMode::kOpenDrain;
   bool idleHigh_ = true;
+#if HAS_ESP_PM && defined(CONFIG_PM_ENABLE)
+  esp_pm_lock_handle_t pmNoLightSleepLock_ = nullptr;
+  bool pmLockInitialized_ = false;
+#endif
   std::vector<rmt_item32_t> items_;
 };
 
@@ -347,7 +426,7 @@ struct CommandJob {
 
 static String gLastStatus;
 
-static void notifyStatus(const char *status, bool alwaysNotify = false) {
+static void notifyStatus(const char *status, bool alwaysNotify) {
   if (!status || !gStatusChar) {
     return;
   }
@@ -530,7 +609,7 @@ static void txWorkerTask(void *context) {
     }
     gWorkerBusy = true;
     bool ok = waveTx.transmitBits(job->bits, job->baud, job->gpio, job->output, job->idleHigh,
-                                  job->driveOneLow, true);
+                                  job->driveOneLow, config.blockingTx);
     gWorkerBusy = false;
     Serial.println(ok ? "TX_DONE" : "TX_FAIL");
     notifyStatus(ok ? "TX_DONE" : "TX_FAIL", true);
@@ -1285,18 +1364,39 @@ static void handleCommand(const String &line) {
   Serial.println("ERR: unknown command");
 }
 
+static inline void setUserLed(bool on) {
+  digitalWrite(kUserLedPin, on ? LOW : HIGH);
+}
+
+static void ledTask(void *context) {
+  (void)context;
+  // Active-low LED: ON at boot for 5s, then short heartbeat pulse every 15s.
+  setUserLed(true);
+  vTaskDelay(kBootLedOnTicks);
+  setUserLed(false);
+  while (true) {
+    vTaskDelay(kHeartbeatPeriodTicks);
+    setUserLed(true);
+    vTaskDelay(kHeartbeatPulseTicks);
+    setUserLed(false);
+  }
+}
+
 void setup() {
   Serial.begin(115200);
   delay(100);
-  pinMode(kBleRxBlinkPin, OUTPUT);
-  digitalWrite(kBleRxBlinkPin, LOW);
+
+  // USER LED on XIAO ESP32-S3 is active-low. Keep OFF by default.
+  pinMode(kUserLedPin, OUTPUT);
+  setUserLed(false);
+
   loadConfig();
   setupPowerManagement();
   if (!applyPreset(config.bootPreset, false)) {
     applyConfigPins();
   }
   applyConfigPins();
-  bleInit();
+
   txQueue = xQueueCreate(4, sizeof(TxJob *));
   commandQueue = xQueueCreate(8, sizeof(CommandJob *));
   if (txQueue) {
@@ -1309,6 +1409,11 @@ void setup() {
   } else {
     Serial.println("ERR: CMD_QUEUE_CREATE");
   }
+
+  xTaskCreatePinnedToCore(ledTask, "ledTask", 2048, nullptr, 1, nullptr, 1);
+
+  // Bring up BLE only after queues/tasks exist so first reconnect write is not lost.
+  bleInit();
   printStatus();
   printHelp();
   if (!config.firstBootShown) {
