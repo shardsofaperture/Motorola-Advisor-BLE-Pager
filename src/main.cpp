@@ -87,8 +87,9 @@ class WaveTx {
       return false;
     }
     auto stopAndSetIdle = [&]() {
-      rmt_tx_stop(channel_);
-      gpio_reset_pin(static_cast<gpio_num_t>(gpio));
+      if (initialized_) {
+        rmt_tx_stop(channel_);
+      }
       setIdle(gpio, output, idleHigh);
     };
     if (bits.empty()) {
@@ -112,8 +113,27 @@ class WaveTx {
       return false;
     }
 
+    auto cleanupTxState = [&]() {
+      releasePmLock();
+      busy_ = false;
+      if (initialized_) {
+        rmt_tx_stop(channel_);
+      }
+      setIdle(gpio, output, idleHigh);
+    };
+    struct CleanupGuard {
+      decltype(cleanupTxState) &fn;
+      bool active = false;
+      ~CleanupGuard() {
+        if (active) {
+          fn();
+        }
+      }
+    } cleanupGuard{cleanupTxState, false};
+
     busy_ = true;
     acquirePmLock();
+    cleanupGuard.active = true;
     setLineDrive(gpio, output, idleHigh);
 
     bool ok = true;
@@ -138,10 +158,6 @@ class WaveTx {
     if (!ok) {
       recoverFromTxFailure(gpio, output, idleHigh);
     }
-    stopAndSetIdle();
-
-    releasePmLock();
-    busy_ = false;
     return ok;
   }
 
@@ -227,7 +243,9 @@ class WaveTx {
   }
 
   void recoverFromTxFailure(int gpio, OutputMode output, bool idleHigh) {
-    rmt_tx_stop(channel_);
+    if (initialized_) {
+      rmt_tx_stop(channel_);
+    }
     if (initialized_) {
       rmt_driver_uninstall(channel_);
       initialized_ = false;
@@ -493,6 +511,7 @@ class CommandParser {
       if (c == '\n' || c == '\r') {
         if (!overflowed_ && lineBuf_.length() > 0) {
           enqueueCommand(lineBuf_, notBeforeMs);
+          lineBuf_ = "";
         } else if (overflowed_) {
           notifyStatus("ERR:LINE_TOO_LONG", true);
           lineBuf_ = "";
@@ -640,6 +659,9 @@ static void txWorkerTask(void *context) {
     gWorkerBusy = false;
     Serial.println(ok ? "TX_DONE" : "TX_FAIL");
     notifyStatus(ok ? "TX_DONE" : "TX_FAIL", true);
+    if (gStatusChar && gLastStatus != "TX_IDLE") {
+      notifyStatus("TX_IDLE", false);
+    }
     delete job;
   }
 }
