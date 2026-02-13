@@ -661,11 +661,13 @@ static void printPmStatus() {
                 static_cast<unsigned int>(gPmConfigureErr));
   Serial.printf("  max_freq_mhz: %u\n", static_cast<unsigned int>(gPmMaxFreq));
   Serial.printf("  min_freq_mhz: %u\n", static_cast<unsigned int>(gPmMinFreq));
+  Serial.printf("  cpu_mhz: %u\n", static_cast<unsigned int>(getCpuFrequencyMhz()));
   Serial.printf("  light_sleep_requested: %s\n", gPmLightSleepRequested ? "true" : "false");
   Serial.printf("  ble_connected: %s\n", gBleConnected ? "true" : "false");
   Serial.printf("  tx_busy: %s\n", txBusy ? "true" : "false");
   Serial.printf("  tx_no_light_sleep_lock_held: %s\n",
                 gTxNoLightSleepLockHeld ? "true" : "false");
+  Serial.printf("  heap_free: %u\n", static_cast<unsigned int>(ESP.getFreeHeap()));
 }
 
 static void bleInit() {
@@ -1489,6 +1491,7 @@ static void ledTask(void *context) {
 void setup() {
   Serial.begin(115200);
   delay(100);
+  setCpuFrequencyMhz(80);
 
   // USER LED on XIAO ESP32-S3 is active-low. Keep OFF by default.
   pinMode(kUserLedPin, OUTPUT);
