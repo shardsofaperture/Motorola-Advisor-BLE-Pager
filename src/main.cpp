@@ -4,6 +4,7 @@
 
 #include <vector>
 
+#include "driver/gpio.h"
 #include "driver/rmt.h"
 #if __has_include("esp_pm.h")
 #include "esp_pm.h"
@@ -86,7 +87,7 @@ class WaveTx {
       return false;
     }
     if (bits.empty()) {
-      setIdleLine(gpio, output, idleHigh);
+      setLineHiZ(gpio);
       return true;
     }
     uint32_t bitPeriodUs = (1000000 + (baud / 2)) / baud;
@@ -94,19 +95,21 @@ class WaveTx {
     if (overflowed_) {
       Serial.println("ERR: RMT_ITEMS_OVERFLOW");
       notifyStatus("TX_TOO_LONG", true);
-      setIdleLine(gpio, output, idleHigh);
+      setLineHiZ(gpio);
       return false;
     }
     if (items_.empty()) {
-      setIdleLine(gpio, output, idleHigh);
+      setLineHiZ(gpio);
       return true;
     }
     if (!ensureConfig(gpio, output, idleHigh)) {
+      setLineHiZ(gpio);
       return false;
     }
 
     busy_ = true;
     acquirePmLock();
+    setLineDrive(gpio, output, idleHigh);
 
     bool ok = true;
     esp_err_t err = rmt_write_items(channel_, items_.data(), items_.size(), false);
@@ -115,28 +118,24 @@ class WaveTx {
       ok = false;
     }
 
-    if (ok && blockingTx) {
-      const TickType_t timeoutTicks = computeTimeoutTicks(bits.size(), baud, true);
+    if (ok) {
+      const TickType_t timeoutTicks = computeTimeoutTicks(bits.size(), baud, blockingTx);
       err = rmt_wait_tx_done(channel_, timeoutTicks);
       if (err == ESP_ERR_TIMEOUT) {
         Serial.println("ERR: RMT_TX_TIMEOUT");
         ok = false;
-      } else {
+        rmt_tx_stop(channel_);
+      } else if (err != ESP_OK) {
         printErr("rmt_wait_tx_done", err);
-        ok = (err == ESP_OK);
-      }
-    } else if (ok) {
-      const TickType_t timeoutTicks = computeTimeoutTicks(bits.size(), baud, false);
-      err = rmt_wait_tx_done(channel_, timeoutTicks);
-      if (err != ESP_OK && err != ESP_ERR_TIMEOUT) {
-        printErr("rmt_wait_tx_done", err);
+        ok = false;
+        rmt_tx_stop(channel_);
       }
     }
 
     if (!ok) {
-      rmt_tx_stop(channel_);
+      recoverFromTxFailure(gpio, output, idleHigh);
     }
-    setIdleLine(gpio, output, idleHigh);
+    setLineHiZ(gpio);
 
     releasePmLock();
     busy_ = false;
@@ -200,7 +199,6 @@ class WaveTx {
     gpio_ = gpio;
     output_ = output;
     idleHigh_ = idleHigh;
-    setIdleLine(gpio_, output_, idleHigh_);
     rmt_config_t config = {};
     config.rmt_mode = RMT_MODE_TX;
     config.channel = channel_;
@@ -223,6 +221,17 @@ class WaveTx {
     }
     initialized_ = true;
     return true;
+  }
+
+  void recoverFromTxFailure(int gpio, OutputMode output, bool idleHigh) {
+    rmt_tx_stop(channel_);
+    if (initialized_) {
+      rmt_driver_uninstall(channel_);
+      initialized_ = false;
+    }
+    if (!ensureConfig(gpio, output, idleHigh)) {
+      Serial.println("ERR: RMT_RECOVER");
+    }
   }
 
   void buildItems(const std::vector<uint8_t> &bits, uint32_t bitPeriodUs, bool driveOneLow) {
@@ -266,13 +275,19 @@ class WaveTx {
     }
   }
 
-  void setIdleLine(int gpio, OutputMode output, bool idleHigh) {
+  void setLineDrive(int gpio, OutputMode output, bool idleHigh) {
     if (output == OutputMode::kOpenDrain) {
       pinMode(gpio, OUTPUT_OPEN_DRAIN);
     } else {
       pinMode(gpio, OUTPUT);
     }
     digitalWrite(gpio, idleHigh ? HIGH : LOW);
+  }
+
+  void setLineHiZ(int gpio) {
+    pinMode(gpio, INPUT);
+    gpio_pullup_dis(static_cast<gpio_num_t>(gpio));
+    gpio_pulldown_dis(static_cast<gpio_num_t>(gpio));
   }
 
   rmt_channel_t channel_ = RMT_CHANNEL_0;
@@ -706,13 +721,10 @@ static bool parseOutputMode(const String &value, OutputMode &out) {
   return false;
 }
 
-static void applyConfigPins() {
-  if (config.output == OutputMode::kOpenDrain) {
-    pinMode(config.dataGpio, OUTPUT_OPEN_DRAIN);
-  } else {
-    pinMode(config.dataGpio, OUTPUT);
-  }
-  digitalWrite(config.dataGpio, config.idleHigh ? HIGH : LOW);
+static void applyIdlePins() {
+  pinMode(config.dataGpio, INPUT);
+  gpio_pullup_dis(static_cast<gpio_num_t>(config.dataGpio));
+  gpio_pulldown_dis(static_cast<gpio_num_t>(config.dataGpio));
 }
 
 static bool applyPreset(const String &name, bool report) {
@@ -746,7 +758,7 @@ static bool applyPreset(const String &name, bool report) {
     }
     return false;
   }
-  applyConfigPins();
+  applyIdlePins();
   if (report) {
     Serial.printf("OK PRESET %s\n", normalized.c_str());
     printStatus();
@@ -1180,7 +1192,7 @@ static void applySetCommand(const String &key, const String &value) {
     return;
   }
 
-  applyConfigPins();
+  applyIdlePins();
   Serial.println("OK");
 }
 
@@ -1269,7 +1281,7 @@ static void handleCommand(const String &line) {
   }
   if (cmd == "LOAD") {
     loadConfig();
-    applyConfigPins();
+    applyIdlePins();
     Serial.println("LOADED");
     return;
   }
@@ -1374,8 +1386,9 @@ static void ledTask(void *context) {
   setUserLed(true);
   vTaskDelay(kBootLedOnTicks);
   setUserLed(false);
+  TickType_t lastWake = xTaskGetTickCount();
   while (true) {
-    vTaskDelay(kHeartbeatPeriodTicks);
+    vTaskDelayUntil(&lastWake, kHeartbeatPeriodTicks);
     setUserLed(true);
     vTaskDelay(kHeartbeatPulseTicks);
     setUserLed(false);
@@ -1393,9 +1406,9 @@ void setup() {
   loadConfig();
   setupPowerManagement();
   if (!applyPreset(config.bootPreset, false)) {
-    applyConfigPins();
+    applyIdlePins();
   }
-  applyConfigPins();
+  applyIdlePins();
 
   txQueue = xQueueCreate(4, sizeof(TxJob *));
   commandQueue = xQueueCreate(8, sizeof(CommandJob *));
@@ -1423,15 +1436,10 @@ void setup() {
 }
 
 // Manual acceptance tests:
-// 1) Connect phone, then send 20 random-spaced "SEND <text>" commands.
-//    Expect TX_DONE for each, no first-write loss after reconnect.
-// 2) With phone screen closed, trigger Tasker BLE write.
-//    Expect BLE RX log and TX_DONE within a couple of seconds.
-// 3) Measure current draw in two states:
-//    a) disconnected (slow advertising active), b) connected idle.
-//    Expect lower average current than previous 50 ms polling build.
-// 4) Send multiple messages and inspect serial logs:
-//    Expect no per-message rmt_driver_install/uninstall churn.
+// 1) Verify repeated SEND commands (20+) do not hang and do not overlap (no TX_BUSY stuck forever).
+// 2) Verify that after TX_DONE/TX_FAIL the data GPIO is Hi-Z (idle).
+// 3) Verify BLE reconnect and immediate write is not dropped.
+// 4) Verify LED still does 5s solid then 15s heartbeat pulse.
 void loop() {
   static String lineBuffer;
   while (Serial.available() > 0) {
