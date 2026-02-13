@@ -86,8 +86,13 @@ class WaveTx {
     if (busy_) {
       return false;
     }
+    auto stopAndSetIdle = [&]() {
+      rmt_tx_stop(channel_);
+      gpio_reset_pin(static_cast<gpio_num_t>(gpio));
+      setIdle(gpio, output, idleHigh);
+    };
     if (bits.empty()) {
-      setLineHiZ(gpio);
+      stopAndSetIdle();
       return true;
     }
     uint32_t bitPeriodUs = (1000000 + (baud / 2)) / baud;
@@ -95,15 +100,15 @@ class WaveTx {
     if (overflowed_) {
       Serial.println("ERR: RMT_ITEMS_OVERFLOW");
       notifyStatus("TX_TOO_LONG", true);
-      setLineHiZ(gpio);
+      stopAndSetIdle();
       return false;
     }
     if (items_.empty()) {
-      setLineHiZ(gpio);
+      stopAndSetIdle();
       return true;
     }
     if (!ensureConfig(gpio, output, idleHigh)) {
-      setLineHiZ(gpio);
+      stopAndSetIdle();
       return false;
     }
 
@@ -124,18 +129,16 @@ class WaveTx {
       if (err == ESP_ERR_TIMEOUT) {
         Serial.println("ERR: RMT_TX_TIMEOUT");
         ok = false;
-        rmt_tx_stop(channel_);
       } else if (err != ESP_OK) {
         printErr("rmt_wait_tx_done", err);
         ok = false;
-        rmt_tx_stop(channel_);
       }
     }
 
     if (!ok) {
       recoverFromTxFailure(gpio, output, idleHigh);
     }
-    setLineHiZ(gpio);
+    stopAndSetIdle();
 
     releasePmLock();
     busy_ = false;
@@ -207,7 +210,7 @@ class WaveTx {
     config.clk_div = 80;
     config.tx_config.loop_en = false;
     config.tx_config.carrier_en = false;
-    config.tx_config.idle_output_en = true;
+    config.tx_config.idle_output_en = false;
     config.tx_config.idle_level = idleHigh_ ? RMT_IDLE_LEVEL_HIGH : RMT_IDLE_LEVEL_LOW;
     esp_err_t err = rmt_config(&config);
     printErr("rmt_config", err);
@@ -282,6 +285,15 @@ class WaveTx {
       pinMode(gpio, OUTPUT);
     }
     digitalWrite(gpio, idleHigh ? HIGH : LOW);
+  }
+
+  void setIdle(int gpio, OutputMode output, bool idleHigh) {
+    if (output == OutputMode::kOpenDrain && idleHigh) {
+      pinMode(gpio, OUTPUT_OPEN_DRAIN);
+      digitalWrite(gpio, HIGH);
+      return;
+    }
+    setLineHiZ(gpio);
   }
 
   void setLineHiZ(int gpio) {
@@ -722,6 +734,11 @@ static bool parseOutputMode(const String &value, OutputMode &out) {
 }
 
 static void applyIdlePins() {
+  if (config.output == OutputMode::kOpenDrain && config.idleHigh) {
+    pinMode(config.dataGpio, OUTPUT_OPEN_DRAIN);
+    digitalWrite(config.dataGpio, HIGH);
+    return;
+  }
   pinMode(config.dataGpio, INPUT);
   gpio_pullup_dis(static_cast<gpio_num_t>(config.dataGpio));
   gpio_pulldown_dis(static_cast<gpio_num_t>(config.dataGpio));
@@ -737,7 +754,7 @@ static bool applyPreset(const String &name, bool report) {
     config.capGrp = 1422890;
     config.functionBits = 2;
     config.dataGpio = 4;
-    config.output = OutputMode::kPushPull;
+    config.output = OutputMode::kOpenDrain;
     config.invertWords = false;
     config.driveOneLow = true;
     config.idleHigh = true;
@@ -1217,7 +1234,7 @@ static void printHelp() {
   Serial.println("  DUMP_MIN 1422890 2");
   Serial.println("  T1 10");
   Serial.println(
-      "ADVISOR preset: baud=512 invertWords=false driveOneLow=true idleHigh=true output=push_pull");
+      "ADVISOR preset: baud=512 invertWords=false driveOneLow=true idleHigh=true output=open_drain");
   Serial.printf(
       "Defaults: baud=%u preambleBits=%u output=%s dataGpio=%d invertWords=%s driveOneLow=%s idleHigh=%s\n",
       config.baud, config.preambleBits,
