@@ -123,7 +123,9 @@ class WaveTx {
     };
     struct CleanupGuard {
       decltype(cleanupTxState) &fn;
-      bool active = false;
+      bool active;
+      CleanupGuard(decltype(cleanupTxState) &cleanupFn, bool isActive)
+          : fn(cleanupFn), active(isActive) {}
       ~CleanupGuard() {
         if (active) {
           fn();
