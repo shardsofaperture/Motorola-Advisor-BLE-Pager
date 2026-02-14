@@ -66,7 +66,7 @@ The Android source is in `android/native-app/`.
 
 ### Prerequisites
 - VS Code
-- JDK 17+
+- Android Studio (recommended, provides JDK)
 - Android SDK + platform tools installed
 - Android device with Developer Options + USB debugging enabled
 
@@ -77,6 +77,10 @@ From repo root:
 cd android/native-app
 ./gradlew assembleDebug
 ```
+
+Notes:
+- This repo includes a local `android/native-app/gradlew` bootstrap script.
+- It auto-detects Android Studio JDK and `~/Library/Android/sdk` on macOS.
 
 APK output:
 - `android/native-app/app/build/outputs/apk/debug/app-debug.apk`

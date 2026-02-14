@@ -1,0 +1,51 @@
+#!/usr/bin/env zsh
+set -euo pipefail
+
+SCRIPT_DIR="${0:A:h}"
+cd "$SCRIPT_DIR"
+
+# Prefer Android Studio's bundled JDK when JAVA_HOME is not set.
+if [[ -z "${JAVA_HOME:-}" ]]; then
+  STUDIO_JBR="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
+  if [[ -x "$STUDIO_JBR/bin/java" ]]; then
+    export JAVA_HOME="$STUDIO_JBR"
+  fi
+fi
+
+# Auto-detect Android SDK on macOS when not already configured.
+if [[ -z "${ANDROID_SDK_ROOT:-}" ]]; then
+  DEFAULT_SDK="$HOME/Library/Android/sdk"
+  if [[ -d "$DEFAULT_SDK" ]]; then
+    export ANDROID_SDK_ROOT="$DEFAULT_SDK"
+  fi
+fi
+if [[ -z "${ANDROID_HOME:-}" && -n "${ANDROID_SDK_ROOT:-}" ]]; then
+  export ANDROID_HOME="$ANDROID_SDK_ROOT"
+fi
+
+# Keep Gradle caches writable from this repository context.
+export GRADLE_USER_HOME="${GRADLE_USER_HOME:-$SCRIPT_DIR/.gradle-user-home}"
+
+# Provide local.properties for Android Gradle Plugin SDK discovery.
+if [[ ! -f "$SCRIPT_DIR/local.properties" && -n "${ANDROID_SDK_ROOT:-}" ]]; then
+  printf "sdk.dir=%s\n" "$ANDROID_SDK_ROOT" > "$SCRIPT_DIR/local.properties"
+fi
+
+GRADLE_BIN="${GRADLE_BIN:-}"
+if [[ -z "$GRADLE_BIN" ]]; then
+  CANDIDATES=("$HOME"/.gradle/wrapper/dists/*/*/*/bin/gradle(N))
+  if (( ${#CANDIDATES[@]} > 0 )); then
+    GRADLE_BIN="${CANDIDATES[-1]}"
+  fi
+fi
+if [[ -z "$GRADLE_BIN" && $+commands[gradle] -eq 1 ]]; then
+  GRADLE_BIN="$(command -v gradle)"
+fi
+
+if [[ -z "$GRADLE_BIN" ]]; then
+  echo "Gradle executable not found." >&2
+  echo "Run one Android Studio sync first or set GRADLE_BIN=/path/to/gradle." >&2
+  exit 1
+fi
+
+exec "$GRADLE_BIN" "$@"

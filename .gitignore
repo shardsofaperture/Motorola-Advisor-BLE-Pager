@@ -4,3 +4,8 @@
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/ipch
+android/native-app/.gradle/
+android/native-app/.gradle-user-home/
+android/native-app/build/
+android/native-app/app/build/
+android/native-app/local.properties

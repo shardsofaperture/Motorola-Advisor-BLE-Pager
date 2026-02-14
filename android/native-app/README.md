@@ -14,7 +14,7 @@ Minimal Android app that forwards Google Messages notifications to the ESP32 BLE
 
 ### Prerequisites
 - VS Code
-- JDK 17+
+- Android Studio (recommended, includes a compatible JDK)
 - Android SDK installed (`ANDROID_HOME` / `ANDROID_SDK_ROOT` configured)
 - USB debugging enabled on Android device (for install)
 
@@ -25,6 +25,11 @@ From repo root:
 cd android/native-app
 ./gradlew assembleDebug
 ```
+
+`./gradlew` in this repo is a local bootstrap script that:
+- detects Android Studio JDK (`/Applications/Android Studio.app/Contents/jbr/Contents/Home`)
+- detects Android SDK (`~/Library/Android/sdk`)
+- keeps Gradle cache in `android/native-app/.gradle-user-home`
 
 ### Install debug build
 

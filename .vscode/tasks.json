@@ -1,0 +1,34 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Android: Assemble Debug APK",
+      "type": "shell",
+      "command": "./gradlew",
+      "args": [
+        "assembleDebug"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/android/native-app"
+      },
+      "group": "build",
+      "problemMatcher": [
+        "$gradle"
+      ]
+    },
+    {
+      "label": "Android: Install Debug APK",
+      "type": "shell",
+      "command": "./gradlew",
+      "args": [
+        "installDebug"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/android/native-app"
+      },
+      "problemMatcher": [
+        "$gradle"
+      ]
+    }
+  ]
+}
