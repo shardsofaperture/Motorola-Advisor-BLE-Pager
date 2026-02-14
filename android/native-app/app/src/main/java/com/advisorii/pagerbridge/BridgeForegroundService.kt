@@ -27,7 +27,7 @@ class BridgeForegroundService : Service() {
     private fun buildNotification(): Notification {
         val passCount = BridgePreferences.getPassCount(this)
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.stat_notify_sync)
+            .setSmallIcon(R.drawable.notification_bar_icon)
             .setContentTitle("PagerBridge running")
             .setContentText("Forwarded messages: $passCount")
             .setOngoing(true)

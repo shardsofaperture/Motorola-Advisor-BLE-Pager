@@ -32,6 +32,9 @@ constexpr TickType_t kHeartbeatPeriodTicks = pdMS_TO_TICKS(15000);
 constexpr TickType_t kHeartbeatPulseTicks = pdMS_TO_TICKS(15);
 constexpr uint32_t kBootGraceMs = 10000;
 constexpr uint32_t kBleDisconnectGraceMs = 10000;
+constexpr uint32_t kMaxTxWaitMs = 30000;
+constexpr bool kForceLegacyGpioProfile = true;
+constexpr bool kDisableLightSleepPolicy = true;
 constexpr const char *kBleServiceUuid = "1b0ee9b4-e833-5a9e-354c-7e2d486b2b7f";
 constexpr const char *kBleRxUuid = "1b0ee9b4-e833-5a9e-354c-7e2d496b2b7f";
 constexpr const char *kBleStatusUuid = "1b0ee9b4-e833-5a9e-354c-7e2d4a6b2b7f";
@@ -188,12 +191,12 @@ class WaveTx {
  private:
   static TickType_t computeTimeoutTicks(size_t bitCount, uint32_t baud, bool blockingTx) {
     if (baud == 0) {
-      return pdMS_TO_TICKS(6000);
+      return pdMS_TO_TICKS(kMaxTxWaitMs);
     }
     uint64_t txMs = (static_cast<uint64_t>(bitCount) * 1000ULL) / static_cast<uint64_t>(baud);
     txMs += blockingTx ? 250ULL : 50ULL;
-    if (txMs > 6000ULL) {
-      txMs = 6000ULL;
+    if (txMs > static_cast<uint64_t>(kMaxTxWaitMs)) {
+      txMs = kMaxTxWaitMs;
     }
     if (txMs == 0ULL) {
       txMs = 1ULL;
@@ -764,6 +767,15 @@ static void configurePm(bool enableLightSleep) {
 }
 
 static void applyPmPolicy(const char *reason) {
+  if (kDisableLightSleepPolicy) {
+    if (gLsApplied) {
+      configurePm(false);
+      gLsApplied = false;
+    }
+    logBlePmState(reason);
+    return;
+  }
+
   bool wantLsNow =
       gLsDesired && gBootGraceOver && !gBleConnected && !gBleAdvertising && !isTxBusy() &&
       !gBleDisconnectGraceActive;
@@ -939,6 +951,12 @@ static bool parseOutputMode(const String &value, OutputMode &out) {
 }
 
 static void applyIdlePins() {
+  if (kForceLegacyGpioProfile) {
+    config.dataGpio = 4;
+    config.output = OutputMode::kOpenDrain;
+    config.driveOneLow = true;
+    config.idleHigh = true;
+  }
   if (config.output == OutputMode::kOpenDrain && config.idleHigh) {
     pinMode(config.dataGpio, OUTPUT_OPEN_DRAIN);
     digitalWrite(config.dataGpio, HIGH);
@@ -1395,12 +1413,24 @@ static void applySetCommand(const String &key, const String &value) {
   } else if (normalizedKey == "preamblebits") {
     config.preambleBits = static_cast<uint32_t>(value.toInt());
   } else if (normalizedKey == "idlehigh") {
+    if (kForceLegacyGpioProfile) {
+      Serial.println("LOCKED: idleHigh=true");
+      return;
+    }
     parseBool(value, config.idleHigh);
   } else if (normalizedKey == "output") {
+    if (kForceLegacyGpioProfile) {
+      Serial.println("LOCKED: output=open_drain");
+      return;
+    }
     parseOutputMode(value, config.output);
   } else if (normalizedKey == "invertwords") {
     parseBool(value, config.invertWords);
   } else if (normalizedKey == "driveonelow") {
+    if (kForceLegacyGpioProfile) {
+      Serial.println("LOCKED: driveOneLow=true");
+      return;
+    }
     parseBool(value, config.driveOneLow);
   } else if (normalizedKey == "blockingtx") {
     parseBool(value, config.blockingTx);
@@ -1411,6 +1441,10 @@ static void applySetCommand(const String &key, const String &value) {
   } else if (normalizedKey == "functionbits") {
     config.functionBits = static_cast<uint8_t>(value.toInt() & 0x3);
   } else if (normalizedKey == "datagpio") {
+    if (kForceLegacyGpioProfile) {
+      Serial.println("LOCKED: dataGpio=4");
+      return;
+    }
     int dataGpio = value.toInt();
     if (dataGpio > 0) {
       config.dataGpio = dataGpio;
@@ -1518,6 +1552,12 @@ static void handleCommand(const String &line) {
     return;
   }
   if (cmd == "LS") {
+    if (kDisableLightSleepPolicy) {
+      gLsDesired = false;
+      config.lsEnabled = false;
+      Serial.println("LS: disabled in legacy GPIO mode");
+      return;
+    }
     String arg = (space < 0) ? "" : trimmed.substring(space + 1);
     arg.trim();
     arg.toUpperCase();
@@ -1561,7 +1601,10 @@ static void handleCommand(const String &line) {
   }
   if (cmd == "LOAD") {
     loadConfig();
-    gLsDesired = config.lsEnabled;
+    gLsDesired = kDisableLightSleepPolicy ? false : config.lsEnabled;
+    if (kDisableLightSleepPolicy) {
+      config.lsEnabled = false;
+    }
     applyIdlePins();
     applyPmPolicy("load_config");
     Serial.println("LOADED");
@@ -1694,6 +1737,9 @@ void setup() {
   setUserLed(false);
 
   loadConfig();
+  if (kDisableLightSleepPolicy) {
+    config.lsEnabled = false;
+  }
   gLsDesired = config.lsEnabled;
   gBootGraceOver = false;
   gLsApplied = false;
