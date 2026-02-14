@@ -1,2 +1,2 @@
-idf_component_register(SRCS "main.cpp"
-                    INCLUDE_DIRS ".")
+# Legacy placeholder for historical layout.
+# Active firmware component is in ../src.
