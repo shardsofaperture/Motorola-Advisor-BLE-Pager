@@ -1,6 +1,0 @@
-MAC=20:6E:F1:86:D3:89
-UUID=1b0ee9b4-e833-5a9e-354c-7e2d486b2b7f
-PLUGIN=BLE Tasker Plugin (Stein Ov)
-PACKAGE=nl.steinov.bletaskerplugin
-PROJECT=PagerBLE
-TASK=Smstopager
