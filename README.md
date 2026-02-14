@@ -1,7 +1,7 @@
 # Advisor II BLE Receiver (POCSAG NRZ Simplified)
 
 Deterministic POCSAG NRZ transmitter for ESP32-S3 using hardware-timed RMT output.
-Configuration lives in LittleFS at `/config.json`.
+Configuration lives in SPIFFS at `/config.json`.
 
 ## Project roadmap (staged)
 This project is being delivered in stages to reduce risk and validate paging reliability early.

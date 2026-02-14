@@ -1,3 +1,3 @@
 cmake_minimum_required(VERSION 3.16)
-
-project(pager_bridge)
+include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+project(advisor_ble_receiver)

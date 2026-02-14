@@ -1,5 +1,6 @@
 {
     "chat.tools.terminal.autoApprove": {
         "C:\\Users\\shard\\.platformio\\penv\\Scripts\\platformio.exe": true
-    }
+    },
+    "idf.currentSetup": "/Users/Zach/esp/v5.5.2/esp-idf"
 }

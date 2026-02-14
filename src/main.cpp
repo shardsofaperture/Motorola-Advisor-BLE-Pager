@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#include <LittleFS.h>
+#include <SPIFFS.h>
 #include <NimBLEDevice.h>
 
 #include <vector>
@@ -83,6 +83,8 @@ static esp_err_t gPmConfigureErr = ESP_FAIL;
 static uint32_t gPmMaxFreq = 80;
 static uint32_t gPmMinFreq = 20;
 static bool gPmLightSleepRequested = true;
+// Debug default: keep BLE bring-up stable by avoiding automatic light sleep.
+static bool gBleDebugNoLightSleep = true;
 static volatile bool gTxNoLightSleepLockHeld = false;
 
 class WaveTx {
@@ -614,8 +616,8 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     gBleConnectedAtMs = millis();
     Serial.println("BLE: connected");
     notifyStatus("CONNECTED", true);
-    NimBLEDevice::getAdvertising()->stop();
-    server->updateConnParams(desc->conn_handle, 800, 800, 4, 600);
+    // NimBLEDevice::getAdvertising()->stop();
+    server->updateConnParams(desc->conn_handle, 24, 48, 0, 400);
   }
 
   void onDisconnect(NimBLEServer *server) override {
@@ -628,12 +630,30 @@ class ServerCallbacks : public NimBLEServerCallbacks {
 };
 
 static void setupPowerManagement() {
-  gPmMaxFreq = 80;
-  gPmMinFreq = 20;
-  gPmLightSleepRequested = true;
+  if (gBleDebugNoLightSleep) {
+    gPmMaxFreq = 80;
+    gPmMinFreq = 80;
+    gPmLightSleepRequested = false;
+  } else {
+    gPmMaxFreq = 80;
+    gPmMinFreq = 20;
+    gPmLightSleepRequested = true;
+  }
 #if HAS_ESP_PM && defined(CONFIG_PM_ENABLE)
   gPmCompiled = true;
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
+  esp_pm_config_esp32s3_t pmConfig = {};
+#elif defined(CONFIG_IDF_TARGET_ESP32S2)
+  esp_pm_config_esp32s2_t pmConfig = {};
+#elif defined(CONFIG_IDF_TARGET_ESP32C3)
+  esp_pm_config_esp32c3_t pmConfig = {};
+#elif defined(CONFIG_IDF_TARGET_ESP32H2)
+  esp_pm_config_esp32h2_t pmConfig = {};
+#elif defined(CONFIG_IDF_TARGET_ESP32)
+  esp_pm_config_esp32_t pmConfig = {};
+#else
   esp_pm_config_t pmConfig = {};
+#endif
   pmConfig.max_freq_mhz = gPmMaxFreq;
   pmConfig.min_freq_mhz = gPmMinFreq;
   pmConfig.light_sleep_enable = gPmLightSleepRequested;
@@ -670,12 +690,12 @@ static void printPmStatus() {
 
 static void bleInit() {
   NimBLEDevice::init("PagerBridge");
-  NimBLEDevice::setPower(ESP_PWR_LVL_N12);
+  NimBLEDevice::setPower(ESP_PWR_LVL_P3);
   NimBLEServer *server = NimBLEDevice::createServer();
   server->setCallbacks(new ServerCallbacks());
   NimBLEService *service = server->createService(kBleServiceUuid);
-  gRxChar = service->createCharacteristic(
-      kBleRxUuid, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
+gRxChar = service->createCharacteristic(
+    kBleRxUuid, NIMBLE_PROPERTY::WRITE);
   gRxChar->setCallbacks(new RxCallbacks());
   gStatusChar = service->createCharacteristic(kBleStatusUuid,
                                               NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
@@ -683,9 +703,9 @@ static void bleInit() {
   service->start();
   NimBLEAdvertising *advertising = NimBLEDevice::getAdvertising();
   advertising->addServiceUUID(service->getUUID());
-  advertising->setScanResponse(false);
-  advertising->setMinInterval(3200);
-  advertising->setMaxInterval(8000);
+  advertising->setScanResponse(true);
+  advertising->setMinInterval(160);
+  advertising->setMaxInterval(320);
   advertising->start();
   notifyStatus("READY", true);
 }
@@ -727,7 +747,7 @@ static void commandWorkerTask(void *context) {
 }
 
 static String readFileToString(const char *path) {
-  File file = LittleFS.open(path, "r");
+  File file = SPIFFS.open(path, "r");
   if (!file) {
     return String();
   }
@@ -850,7 +870,7 @@ static bool applyPreset(const String &name, bool report) {
 }
 
 static void writeConfigFile() {
-  File file = LittleFS.open(kConfigPath, "w");
+  File file = SPIFFS.open(kConfigPath, "w");
   if (!file) {
     Serial.println("ERR: failed to open config for write");
     return;
@@ -882,11 +902,11 @@ static bool loadConfig() {
   uint32_t legacyPreambleMs = 0;
   bool sawLegacyInvert = false;
   bool legacyInvert = false;
-  if (!LittleFS.begin(true)) {
-    Serial.println("ERR: LittleFS mount failed");
+  if (!SPIFFS.begin(true)) {
+    Serial.println("ERR: SPIFFS mount failed");
     return false;
   }
-  if (!LittleFS.exists(kConfigPath)) {
+  if (!SPIFFS.exists(kConfigPath)) {
     shouldShowHelp = true;
     return shouldShowHelp;
   }
@@ -1071,8 +1091,10 @@ static std::vector<uint8_t> buildPocsagBits(const String &message, uint32_t capc
   return bits;
 }
 
-static std::vector<uint8_t> buildRepeatedPocsagBits(const String &message, uint32_t capcode,
-                                                    uint32_t preambleBits, uint32_t repeatMs) {
+[[maybe_unused]] static std::vector<uint8_t> buildRepeatedPocsagBits(const String &message,
+                                                                     uint32_t capcode,
+                                                                     uint32_t preambleBits,
+                                                                     uint32_t repeatMs) {
   std::vector<uint8_t> bits;
   if (preambleBits > 0) {
     bits.reserve(preambleBits);
@@ -1099,8 +1121,9 @@ static std::vector<uint8_t> buildRepeatedPocsagBits(const String &message, uint3
   return bits;
 }
 
-static std::vector<uint8_t> buildMinimalPocsagBits(uint32_t capcode, uint8_t functionBits,
-                                                   uint32_t preambleMs) {
+[[maybe_unused]] static std::vector<uint8_t> buildMinimalPocsagBits(uint32_t capcode,
+                                                                    uint8_t functionBits,
+                                                                    uint32_t preambleMs) {
   std::vector<uint8_t> bits = buildAlternatingBits(preambleMs, config.baud);
   std::vector<uint32_t> words = buildMinimalBatch(capcode, functionBits);
   applyWordInversion(words, config.invertWords);
@@ -1547,3 +1570,26 @@ void loop() {
   }
   vTaskDelay(pdMS_TO_TICKS(1000));
 }
+
+#if !defined(CONFIG_AUTOSTART_ARDUINO) || !CONFIG_AUTOSTART_ARDUINO
+namespace {
+TaskHandle_t gArduinoLoopTaskHandle = nullptr;
+
+void arduinoLoopTask(void *context) {
+  (void)context;
+  setup();
+  while (true) {
+    loop();
+    if (serialEventRun) {
+      serialEventRun();
+    }
+  }
+}
+}
+
+extern "C" void app_main() {
+  initArduino();
+  xTaskCreateUniversal(arduinoLoopTask, "loopTask", 8192, nullptr, 1,
+                       &gArduinoLoopTaskHandle, ARDUINO_RUNNING_CORE);
+}
+#endif
