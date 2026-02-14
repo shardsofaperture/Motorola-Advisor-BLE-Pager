@@ -2,7 +2,17 @@
 
 This directory contains Tasker automation assets for forwarding Android message notifications to the `PagerBridge` BLE receiver.
 
-## Required Apps / Plugins
+## Native APK alternative (no Tasker required)
+A minimal native Android app is now included at `android-tools/native-app/`.
+
+- It listens for **Google Messages** notifications (`com.google.android.apps.messaging`).
+- It extracts sender + body text from the posted notification.
+- It writes `SEND <sender>: <message>\n` over BLE to `PagerBridge` using the firmware UUIDs.
+- It avoids Tasker, AutoNotification, and AutoInput.
+
+See `android-tools/native-app/README.md` for setup/build/install details.
+
+## Required Apps / Plugins (Tasker flow)
 - **Tasker** (automation engine)
 - **AutoNotification** (notification intercept for SMS + Google Messages/RCS)
 - **AutoInput** (optional fallback when notification payload fields are incomplete)
@@ -47,6 +57,7 @@ Configure these for reliable background delivery:
 5. Validate end-to-end with a test message and BLE `PONG` check.
 
 ## Files in this Folder
+- `native-app/`: Minimal Android app project (Kotlin + Gradle).
 - `tasker/SmstoPager.prj.xml`: Tasker project export containing profiles + tasks.
 - `tasker/variables.md`: Variable reference (globals and locals).
 - `tasker/troubleshooting.md`: BLE and notification debugging checklist.

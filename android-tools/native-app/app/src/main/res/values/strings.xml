@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">PagerBridge Forwarder</string>
+    <string name="notification_listener_name">PagerBridge Notification Listener</string>
+</resources>
