@@ -1,14 +1,20 @@
 # PagerBridge Native Forwarder (Android)
 
-Minimal Android app that forwards Google Messages notifications to the ESP32 BLE pager bridge.
+Android app that forwards Google Messages notifications to the ESP32 BLE pager bridge.
 
 ## What it does
 - Monitors notifications from `com.google.android.apps.messaging`.
 - Reads sender (`android.title`) and message body (`android.text`).
 - Writes BLE command:
   - `SEND <sender>: <message>\n`
-- Targets device name `PagerBridge` using RX characteristic UUID:
-  - `1b0ee9b4-e833-5a9e-354c-7e2d496b2b7f`
+- Supports background operation through NotificationListenerService.
+- Optional ongoing system notification indicator.
+- Provides UI settings for:
+  - BLE device name / bonded-device selection
+  - BLE device address
+  - Service UUID
+  - RX characteristic UUID
+- Shows message pass count, log preview window, and clear-log action.
 
 ## VS Code on macOS build flow
 
@@ -43,8 +49,8 @@ cd android/native-app
 2. Grant Bluetooth permissions.
 3. Grant notification runtime permission (Android 13+).
 4. Open notification access settings and enable `PagerBridge Forwarder`.
+5. Save desired BLE settings (or choose a paired BLE device from list).
 
 ## Notes / limitations
 - Uses notification contents (not direct SMS provider reads).
-- For RCS/Google Messages this avoids Tasker plugins.
 - If notification content is hidden/private, forwarding content may be unavailable.

@@ -7,7 +7,6 @@ import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothGattCharacteristic
-import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothGattService
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
@@ -18,40 +17,42 @@ import androidx.core.content.ContextCompat
 import java.util.UUID
 
 object BlePagerClient {
-    private val serviceUuid: UUID = UUID.fromString("1b0ee9b4-e833-5a9e-354c-7e2d486b2b7f")
-    private val rxUuid: UUID = UUID.fromString("1b0ee9b4-e833-5a9e-354c-7e2d496b2b7f")
-    private const val pagerDeviceName = "PagerBridge"
 
-    fun sendToPager(context: Context, payload: String) {
+    fun sendToPager(context: Context, payload: String): Boolean {
         if (!hasBluetoothPermission(context)) {
-            return
+            return false
         }
 
-        val manager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager ?: return
-        val adapter = manager.adapter ?: return
+        val config = BridgePreferences.loadConfig(context)
+        val serviceUuid = runCatching { UUID.fromString(config.serviceUuid) }.getOrNull() ?: return false
+        val rxUuid = runCatching { UUID.fromString(config.rxUuid) }.getOrNull() ?: return false
+
+        val manager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager ?: return false
+        val adapter = manager.adapter ?: return false
         if (!adapter.isEnabled) {
-            return
+            return false
         }
 
-        val target = findConnectedTarget(adapter)
-            ?: findBondedTarget(adapter)
-            ?: return
-
-        connectAndWrite(context, target, payload)
+        val target = findTarget(adapter, config.deviceAddress, config.deviceName) ?: return false
+        connectAndWrite(context, target, serviceUuid, rxUuid, payload)
+        return true
     }
 
-    private fun findConnectedTarget(adapter: BluetoothAdapter): BluetoothDevice? {
-        return adapter.bondedDevices.firstOrNull { it.name == pagerDeviceName }
-    }
-
-    private fun findBondedTarget(adapter: BluetoothAdapter): BluetoothDevice? {
-        return adapter.bondedDevices.firstOrNull { it.name == pagerDeviceName }
+    private fun findTarget(adapter: BluetoothAdapter, address: String, name: String): BluetoothDevice? {
+        val byAddress = adapter.bondedDevices.firstOrNull { it.address.equals(address, ignoreCase = true) }
+        if (byAddress != null) return byAddress
+        return adapter.bondedDevices.firstOrNull { it.name == name }
     }
 
     @SuppressLint("MissingPermission")
-    private fun connectAndWrite(context: Context, device: BluetoothDevice, payload: String) {
-        var gatt: BluetoothGatt? = null
-        gatt = device.connectGatt(context, false, object : BluetoothGattCallback() {
+    private fun connectAndWrite(
+        context: Context,
+        device: BluetoothDevice,
+        serviceUuid: UUID,
+        rxUuid: UUID,
+        payload: String
+    ) {
+        device.connectGatt(context, false, object : BluetoothGattCallback() {
             override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
                 if (newState == BluetoothProfile.STATE_CONNECTED) {
                     g.discoverServices()
@@ -65,15 +66,15 @@ object BlePagerClient {
                     g.disconnect()
                     return
                 }
-                val characteristic: BluetoothGattCharacteristic =
-                    service.getCharacteristic(rxUuid) ?: run {
-                        g.disconnect()
-                        return
-                    }
+                val characteristic: BluetoothGattCharacteristic = service.getCharacteristic(rxUuid) ?: run {
+                    g.disconnect()
+                    return
+                }
 
-                characteristic.value = payload.toByteArray()
+                val bytes = payload.toByteArray()
+                characteristic.value = bytes
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    g.writeCharacteristic(characteristic, payload.toByteArray(), BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
+                    g.writeCharacteristic(characteristic, bytes, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
                 } else {
                     @Suppress("DEPRECATION")
                     g.writeCharacteristic(characteristic)
@@ -86,14 +87,6 @@ object BlePagerClient {
                 status: Int
             ) {
                 g.disconnect()
-            }
-
-            override fun onDescriptorWrite(
-                gatt: BluetoothGatt,
-                descriptor: BluetoothGattDescriptor,
-                status: Int
-            ) {
-                // No-op
             }
         })
     }

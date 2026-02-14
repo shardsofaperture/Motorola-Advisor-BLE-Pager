@@ -1,63 +1,21 @@
-# Android Automation Assets
+# Android App
 
-This directory contains Tasker automation assets for forwarding Android message notifications to the `PagerBridge` BLE receiver.
+This directory contains the Android app source used to forward Google Messages notifications to the `PagerBridge` BLE receiver.
 
-## Native APK alternative (no Tasker required)
-A minimal native Android app is now included at `android/native-app/`.
+## Native app capabilities
+- Listens for **Google Messages** notifications (`com.google.android.apps.messaging`).
+- Extracts sender + body text from posted notifications.
+- Writes `SEND <sender>: <message>\n` over BLE to PagerBridge.
+- Runs in the background via Android notification listener service.
+- Optional ongoing status notification in the system shade.
+- On-device settings for target BLE name/address and service/characteristic UUIDs.
+- Message pass counter and in-app log preview window.
 
-- It listens for **Google Messages** notifications (`com.google.android.apps.messaging`).
-- It extracts sender + body text from the posted notification.
-- It writes `SEND <sender>: <message>\n` over BLE to `PagerBridge` using the firmware UUIDs.
-- It avoids Tasker, AutoNotification, and AutoInput.
-
-See `android/native-app/README.md` for setup/build/install details.
-
-## Required Apps / Plugins (Tasker flow)
-- **Tasker** (automation engine)
-- **AutoNotification** (notification intercept for SMS + Google Messages/RCS)
-- **AutoInput** (optional fallback when notification payload fields are incomplete)
-- **BLE Tasker Plugin**: `nl.steinov.bletaskerplugin`
-
-## BLE Target Values
-Use these values exactly as defined in the firmware repository README:
+## BLE Target defaults
 - Device name: `PagerBridge`
 - Service UUID: `1b0ee9b4-e833-5a9e-354c-7e2d486b2b7f`
 - RX UUID (write): `1b0ee9b4-e833-5a9e-354c-7e2d496b2b7f`
 - Status UUID (notify): `1b0ee9b4-e833-5a9e-354c-7e2d4a6b2b7f`
 
-## Android Permissions / Power Settings
-Configure these for reliable background delivery:
-
-1. **Tasker**
-   - Notification access (for AutoNotification trigger path)
-   - Run in background / unrestricted battery mode
-   - Disable battery optimization
-   - Allow autostart (OEM-specific)
-
-2. **AutoNotification**
-   - Notification listener access enabled
-   - Background activity allowed
-   - Disable battery optimization
-
-3. **BLE Tasker Plugin (`nl.steinov.bletaskerplugin`)**
-   - Nearby devices / Bluetooth permissions
-   - Location permission where required by Android version/OEM BLE stack
-   - Disable battery optimization
-
-4. **AutoInput** (optional fallback profile only)
-   - Accessibility service enabled
-   - Display over other apps (if requested by workflow)
-   - Disable battery optimization
-
-## Import Instructions
-1. Copy `android/tasker/SmstoPager.prj.xml` to your phone.
-2. In Tasker, open **Data > Restore** and import the project XML.
-3. Install/enable all required plugins and permissions above.
-4. Review globals in `android/tasker/variables.md`.
-5. Validate end-to-end with a test message and BLE `PONG` check.
-
-## Files in this Folder
-- `native-app/`: Minimal Android app project (Kotlin + Gradle).
-- `tasker/SmstoPager.prj.xml`: Tasker project export containing profiles + tasks.
-- `tasker/variables.md`: Variable reference (globals and locals).
-- `tasker/troubleshooting.md`: BLE and notification debugging checklist.
+## Files in this folder
+- `native-app/`: Android app project (Kotlin + Gradle).

@@ -10,7 +10,6 @@ Repository for two deliverables:
 - `src/` → **active ESP32 firmware source** (PlatformIO + Arduino + ESP-IDF)
 - `platformio.ini` / `sdkconfig.defaults` / `huge_app.csv` → firmware build configuration
 - `android/native-app/` → **Android app source** (Gradle Kotlin project)
-- `android/tasker/` and `docs/android-tasker.md` → optional Tasker automation assets/docs
 - `src_arduino/` → legacy placeholder (not used for builds)
 
 > Only the power-management firmware in `src/` is supported and maintained.
@@ -96,6 +95,7 @@ cd android/native-app
 2. Grant Bluetooth permissions.
 3. Grant notification runtime permission (Android 13+).
 4. Enable notification access for the app.
+5. Save BLE configuration (device name / UUIDs) if different from defaults.
 
 ---
 
@@ -113,11 +113,3 @@ If needed, use nRF Connect to manually test BLE writes with:
 PING\n
 SEND 123456 0 test message\n
 ```
-
----
-
-## Optional Tasker path
-
-If you prefer Tasker automation instead of the native app, use:
-- `android/tasker/SmstoPager.prj.xml`
-- `docs/android-tasker.md`
