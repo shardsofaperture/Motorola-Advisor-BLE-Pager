@@ -30,6 +30,8 @@ constexpr int kUserLedPin = 21;
 constexpr TickType_t kBootLedOnTicks = pdMS_TO_TICKS(5000);
 constexpr TickType_t kHeartbeatPeriodTicks = pdMS_TO_TICKS(15000);
 constexpr TickType_t kHeartbeatPulseTicks = pdMS_TO_TICKS(15);
+constexpr uint32_t kBootGraceMs = 10000;
+constexpr uint32_t kBleDisconnectGraceMs = 10000;
 constexpr const char *kBleServiceUuid = "1b0ee9b4-e833-5a9e-354c-7e2d486b2b7f";
 constexpr const char *kBleRxUuid = "1b0ee9b4-e833-5a9e-354c-7e2d496b2b7f";
 constexpr const char *kBleStatusUuid = "1b0ee9b4-e833-5a9e-354c-7e2d4a6b2b7f";
@@ -49,6 +51,7 @@ struct Config {
   bool driveOneLow = true;
   bool idleHigh = true;
   bool blockingTx = false;
+  bool lsEnabled = true;
   String bootPreset = "ADVISOR";
   bool firstBootShown = false;
 };
@@ -58,7 +61,9 @@ static Config config;
 static void printStatus();
 static void printPmStatus();
 static void handleCommand(const String &line);
+static void applyPmPolicy(const char *reason);
 static void notifyStatus(const char *status, bool alwaysNotify);
+static void logBlePmState(const char *tag);
 static void printErr(const char *tag, esp_err_t err) {
   if (err == ESP_OK) {
     return;
@@ -83,9 +88,16 @@ static esp_err_t gPmConfigureErr = ESP_FAIL;
 static uint32_t gPmMaxFreq = 80;
 static uint32_t gPmMinFreq = 20;
 static bool gPmLightSleepRequested = true;
-// Debug default: keep BLE bring-up stable by avoiding automatic light sleep.
-static bool gBleDebugNoLightSleep = true;
+static volatile bool gBootGraceOver = false;
+static volatile bool gBootGraceExpiredEvent = false;
+static bool gLsApplied = false;
+static bool gLsDesired = false;
 static volatile bool gTxNoLightSleepLockHeld = false;
+static esp_pm_lock_handle_t sBleNoLightSleepLock = nullptr;
+static bool gBleNoLightSleepLockHeld = false;
+static volatile bool gBleDisconnectGraceActive = false;
+static uint32_t gBleDisconnectGraceUntilMs = 0;
+static uint32_t gLastAdvWatchdogMs = 0;
 
 class WaveTx {
  public:
@@ -475,7 +487,11 @@ class PocsagEncoder {
 static PocsagEncoder encoder;
 static WaveTx waveTx;
 static volatile bool gWorkerBusy = false;
+static bool isTxBusy() {
+  return gWorkerBusy || (txQueue && uxQueueMessagesWaiting(txQueue) > 0);
+}
 static bool gBleConnected = false;
+static volatile bool gBleAdvertising = false;
 static uint32_t gBleConnectedAtMs = 0;
 static NimBLECharacteristic *gRxChar = nullptr;
 static NimBLECharacteristic *gStatusChar = nullptr;
@@ -492,6 +508,58 @@ struct CommandJob {
 };
 
 static String gLastStatus;
+
+static void updateBlePmLock(const char *why) {
+#if HAS_ESP_PM && defined(CONFIG_PM_ENABLE)
+  bool bleActive = gBleConnected || gBleAdvertising;
+  if (bleActive && !gBleNoLightSleepLockHeld && sBleNoLightSleepLock) {
+    esp_err_t err = esp_pm_lock_acquire(sBleNoLightSleepLock);
+    if (err != ESP_OK) {
+      printErr("esp_pm_lock_acquire(ble_active)", err);
+    } else {
+      gBleNoLightSleepLockHeld = true;
+    }
+  } else if (!bleActive && gBleNoLightSleepLockHeld && sBleNoLightSleepLock) {
+    esp_err_t err = esp_pm_lock_release(sBleNoLightSleepLock);
+    if (err != ESP_OK) {
+      printErr("esp_pm_lock_release(ble_active)", err);
+    } else {
+      gBleNoLightSleepLockHeld = false;
+    }
+  }
+#else
+  (void)why;
+#endif
+  logBlePmState(why);
+}
+
+static void initBlePmLock() {
+#if HAS_ESP_PM && defined(CONFIG_PM_ENABLE)
+  if (!sBleNoLightSleepLock) {
+    esp_err_t err =
+        esp_pm_lock_create(ESP_PM_NO_LIGHT_SLEEP, 0, "ble_active", &sBleNoLightSleepLock);
+    if (err != ESP_OK) {
+      printErr("esp_pm_lock_create(ble_active)", err);
+    }
+  }
+#endif
+  updateBlePmLock("BLE_PM_LOCK_INIT");
+}
+
+static void logBlePmState(const char *tag) {
+  bool bleActive = gBleConnected || gBleAdvertising;
+  bool lsPolicyWantsOn = gLsDesired && gBootGraceOver && !gBleConnected && !gBleAdvertising &&
+                         !isTxBusy() && !gBleDisconnectGraceActive;
+  Serial.printf(
+      "BLE_PM[%s] adv=%s conn=%s ble_active=%s ls_req=%s ls_applied=%s pm_ls_cfg=%s "
+      "cpu=%u/%u lock_ble=%s lock_tx=%s heap=%u up_ms=%u\n",
+      tag ? tag : "?", gBleAdvertising ? "1" : "0", gBleConnected ? "1" : "0",
+      bleActive ? "1" : "0", lsPolicyWantsOn ? "1" : "0", gLsApplied ? "1" : "0",
+      gPmLightSleepRequested ? "1" : "0", static_cast<unsigned int>(gPmMaxFreq),
+      static_cast<unsigned int>(gPmMinFreq), gBleNoLightSleepLockHeld ? "1" : "0",
+      gTxNoLightSleepLockHeld ? "1" : "0", static_cast<unsigned int>(ESP.getFreeHeap()),
+      static_cast<unsigned int>(millis()));
+}
 
 static void notifyStatus(const char *status, bool alwaysNotify) {
   if (!status || !gStatusChar) {
@@ -577,11 +645,6 @@ class RxCallbacks : public NimBLECharacteristicCallbacks {
     }
     gLastBlePayload = value;
     gLastBlePayloadMs = now;
-    std::string input = value;
-    if (input.empty() || (input.back() != '\n' && input.back() != '\r')) {
-      input.push_back('\n');
-    }
-
     String preview;
     constexpr size_t kMaxPreview = 80;
     preview.reserve(kMaxPreview);
@@ -598,6 +661,11 @@ class RxCallbacks : public NimBLECharacteristicCallbacks {
     Serial.printf("BLE RX %u bytes: %s\n", static_cast<unsigned int>(value.size()),
                   preview.c_str());
 
+    std::string input = value;
+    if (input.empty() || (input.back() != '\n' && input.back() != '\r')) {
+      input.push_back('\n');
+    }
+
     if (bleContext.parser) {
       uint32_t delayUntilMs = 0;
       uint32_t elapsedSinceConnect = now - gBleConnectedAtMs;
@@ -613,31 +681,53 @@ class ServerCallbacks : public NimBLEServerCallbacks {
  public:
   void onConnect(NimBLEServer *server, ble_gap_conn_desc *desc) override {
     gBleConnected = true;
+    gBleDisconnectGraceActive = false;
+    gBleDisconnectGraceUntilMs = 0;
     gBleConnectedAtMs = millis();
     Serial.println("BLE: connected");
     notifyStatus("CONNECTED", true);
-    // NimBLEDevice::getAdvertising()->stop();
+    NimBLEDevice::getAdvertising()->stop();
+    gBleAdvertising = false;
+    updateBlePmLock("BLE_CONNECT");
+    applyPmPolicy("ble_connect");
+    logBlePmState("BLE_CONNECT_POLICY");
     server->updateConnParams(desc->conn_handle, 24, 48, 0, 400);
   }
 
   void onDisconnect(NimBLEServer *server) override {
     (void)server;
     gBleConnected = false;
+    gBleDisconnectGraceActive = true;
+    gBleDisconnectGraceUntilMs = millis() + kBleDisconnectGraceMs;
     Serial.println("BLE: disconnected");
     notifyStatus("READY", true);
-    NimBLEDevice::getAdvertising()->start();
+    NimBLEAdvertising *advertising = NimBLEDevice::getAdvertising();
+    advertising->setScanResponse(true);
+    advertising->setMinInterval(160);  // 100ms
+    advertising->setMaxInterval(320);  // 200ms
+    advertising->start(0);             // no timeout
+    gBleAdvertising = true;
+    updateBlePmLock("BLE_DISCONNECT_ADV_RESTART");
+    applyPmPolicy("ble_disconnect");
+    logBlePmState("BLE_DISCONNECT_POLICY");
+  }
+
+  void onDisconnect(NimBLEServer *server, ble_gap_conn_desc *desc, int reason) {
+    (void)desc;
+    Serial.printf("BLE: disconnect reason=%d\n", reason);
+    onDisconnect(server);
   }
 };
 
-static void setupPowerManagement() {
-  if (gBleDebugNoLightSleep) {
-    gPmMaxFreq = 80;
-    gPmMinFreq = 80;
-    gPmLightSleepRequested = false;
-  } else {
+static void configurePm(bool enableLightSleep) {
+  if (enableLightSleep) {
     gPmMaxFreq = 80;
     gPmMinFreq = 20;
     gPmLightSleepRequested = true;
+  } else {
+    gPmMaxFreq = 80;
+    gPmMinFreq = 20;
+    gPmLightSleepRequested = false;
   }
 #if HAS_ESP_PM && defined(CONFIG_PM_ENABLE)
   gPmCompiled = true;
@@ -673,6 +763,24 @@ static void setupPowerManagement() {
 #endif
 }
 
+static void applyPmPolicy(const char *reason) {
+  bool wantLsNow =
+      gLsDesired && gBootGraceOver && !gBleConnected && !gBleAdvertising && !isTxBusy() &&
+      !gBleDisconnectGraceActive;
+  if (wantLsNow == gLsApplied) {
+    logBlePmState(reason);
+    return;
+  }
+
+  configurePm(wantLsNow);
+  gLsApplied = wantLsNow;
+
+  Serial.printf("PM_POLICY: %s -> LS_%s (configured=%s err=0x%X)\n", reason,
+                gLsApplied ? "ON" : "OFF", gPmConfigured ? "yes" : "no",
+                static_cast<unsigned int>(gPmConfigureErr));
+  printPmStatus();
+}
+
 static void printPmStatus() {
   bool txBusy = gWorkerBusy || (txQueue && uxQueueMessagesWaiting(txQueue) > 0);
   Serial.println("PM STATUS:");
@@ -683,9 +791,17 @@ static void printPmStatus() {
   Serial.printf("  min_freq_mhz: %u\n", static_cast<unsigned int>(gPmMinFreq));
   Serial.printf("  light_sleep_requested: %s\n", gPmLightSleepRequested ? "true" : "false");
   Serial.printf("  ble_connected: %s\n", gBleConnected ? "true" : "false");
+  Serial.printf("  ble_advertising: %s\n", gBleAdvertising ? "true" : "false");
   Serial.printf("  tx_busy: %s\n", txBusy ? "true" : "false");
   Serial.printf("  tx_no_light_sleep_lock_held: %s\n",
                 gTxNoLightSleepLockHeld ? "true" : "false");
+  Serial.printf("  ble_no_light_sleep_lock_held: %s\n",
+                gBleNoLightSleepLockHeld ? "true" : "false");
+  Serial.printf("  ble_disc_grace_active: %s\n",
+                gBleDisconnectGraceActive ? "true" : "false");
+  Serial.printf("  ls_desired: %s\n", gLsDesired ? "ON" : "OFF");
+  Serial.printf("  ls_applied: %s\n", gLsApplied ? "ON" : "OFF");
+  Serial.printf("  boot_grace_over: %s\n", gBootGraceOver ? "true" : "false");
 }
 
 static void bleInit() {
@@ -694,8 +810,8 @@ static void bleInit() {
   NimBLEServer *server = NimBLEDevice::createServer();
   server->setCallbacks(new ServerCallbacks());
   NimBLEService *service = server->createService(kBleServiceUuid);
-gRxChar = service->createCharacteristic(
-    kBleRxUuid, NIMBLE_PROPERTY::WRITE);
+  gRxChar = service->createCharacteristic(
+      kBleRxUuid, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
   gRxChar->setCallbacks(new RxCallbacks());
   gStatusChar = service->createCharacteristic(kBleStatusUuid,
                                               NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
@@ -704,9 +820,11 @@ gRxChar = service->createCharacteristic(
   NimBLEAdvertising *advertising = NimBLEDevice::getAdvertising();
   advertising->addServiceUUID(service->getUUID());
   advertising->setScanResponse(true);
-  advertising->setMinInterval(160);
-  advertising->setMaxInterval(320);
-  advertising->start();
+  advertising->setMinInterval(160);  // 100ms
+  advertising->setMaxInterval(320);  // 200ms
+  advertising->start(0);             // no timeout
+  gBleAdvertising = true;
+  updateBlePmLock("BLE_ADV_START_INIT");
   notifyStatus("READY", true);
 }
 
@@ -723,6 +841,7 @@ static void txWorkerTask(void *context) {
     gWorkerBusy = false;
     Serial.println(ok ? "TX_DONE" : "TX_FAIL");
     notifyStatus(ok ? "TX_DONE" : "TX_FAIL", true);
+    applyPmPolicy(ok ? "tx_done" : "tx_fail");
     if (gStatusChar && gLastStatus != "TX_IDLE") {
       notifyStatus("TX_IDLE", false);
     }
@@ -889,6 +1008,7 @@ static void writeConfigFile() {
   file.printf("  \"idleHigh\": %s,\n", config.idleHigh ? "true" : "false");
   file.printf("  \"blockingTx\": %s,\n", config.blockingTx ? "true" : "false");
   file.printf("  \"bootPreset\": \"%s\",\n", config.bootPreset.c_str());
+  file.printf("  \"lsEnabled\": %s,\n", config.lsEnabled ? "true" : "false");
   file.printf("  \"firstBootShown\": %s\n", config.firstBootShown ? "true" : "false");
   file.println("}");
   file.close();
@@ -970,6 +1090,9 @@ static bool loadConfig() {
   }
   if (extractJsonValue(json, "firstBootShown", value)) {
     parseBool(value, config.firstBootShown);
+  }
+  if (extractJsonValue(json, "lsEnabled", value)) {
+    parseBool(value, config.lsEnabled);
   }
   if (!sawNewPreambleBits && sawLegacyPreambleMs) {
     config.preambleBits = (legacyPreambleMs * config.baud) / 1000;
@@ -1166,6 +1289,7 @@ static bool queueTxJob(const std::vector<uint8_t> &bits) {
   }
   Serial.println("QUEUED");
   notifyStatus("TX_BUSY", true);
+  applyPmPolicy("tx_queued");
   return true;
 }
 
@@ -1307,7 +1431,7 @@ static void printHelp() {
   Serial.println(
       "  STATUS | PM | PM_STATUS | HELP | ? | PRESET <name> | SCOPE <ms> | DEBUG_SCOPE | H | SEND <text> | "
       "SEND_MIN <capcode> [func] [repeatMs] | DUMP_MIN <capcode> <func> | STATUS_TX | T1 <sec>");
-  Serial.println("  SET <key> <value> | SAVE | LOAD");
+  Serial.println("  SET <key> <value> | SAVE | LOAD | LS ON | LS OFF | LS | LS STATUS");
   Serial.println("Presets: ADVISOR | GENERIC");
   Serial.println("SET keys: baud preambleBits capInd capGrp functionBits dataGpio output");
   Serial.println("          invertWords driveOneLow idleHigh blockingTx");
@@ -1338,6 +1462,7 @@ static void handleCommand(const String &line) {
   if (trimmed.length() == 0) {
     return;
   }
+  Serial.printf("CMD: [%s]\n", trimmed.c_str());
   int space = trimmed.indexOf(' ');
   String cmd = (space < 0) ? trimmed : trimmed.substring(0, space);
   cmd.toUpperCase();
@@ -1378,6 +1503,47 @@ static void handleCommand(const String &line) {
     printPmStatus();
     return;
   }
+  if (cmd == "PM_APPLY") {
+    applyPmPolicy("boot_grace_end");
+    return;
+  }
+  if (cmd == "PM_APPLY_DISC_GRACE") {
+    applyPmPolicy("ble_disc_grace_end");
+    return;
+  }
+  if (cmd == "LS_STATUS") {
+    Serial.printf("LS: desired=%s applied=%s grace_over=%s ble_connected=%s\n",
+                  gLsDesired ? "ON" : "OFF", gLsApplied ? "ON" : "OFF",
+                  gBootGraceOver ? "true" : "false", gBleConnected ? "true" : "false");
+    return;
+  }
+  if (cmd == "LS") {
+    String arg = (space < 0) ? "" : trimmed.substring(space + 1);
+    arg.trim();
+    arg.toUpperCase();
+    if (arg == "ON") {
+      gLsDesired = true;
+      config.lsEnabled = true;
+      Serial.println("OK LS ON");
+      applyPmPolicy("serial_ls_on");
+      return;
+    }
+    if (arg == "OFF") {
+      gLsDesired = false;
+      config.lsEnabled = false;
+      Serial.println("OK LS OFF");
+      applyPmPolicy("serial_ls_off");
+      return;
+    }
+    if (arg.length() == 0 || arg == "STATUS") {
+      Serial.printf("LS: desired=%s applied=%s grace_over=%s ble_connected=%s\n",
+                    gLsDesired ? "ON" : "OFF", gLsApplied ? "ON" : "OFF",
+                    gBootGraceOver ? "true" : "false", gBleConnected ? "true" : "false");
+      return;
+    }
+    Serial.println("ERR: LS ON|OFF|STATUS");
+    return;
+  }
   if (cmd == "PING") {
     notifyStatus("CONNECTED", true);
     Serial.println("PONG");
@@ -1395,7 +1561,9 @@ static void handleCommand(const String &line) {
   }
   if (cmd == "LOAD") {
     loadConfig();
+    gLsDesired = config.lsEnabled;
     applyIdlePins();
+    applyPmPolicy("load_config");
     Serial.println("LOADED");
     return;
   }
@@ -1509,6 +1677,14 @@ static void ledTask(void *context) {
   }
 }
 
+static void bootGraceTask(void *context) {
+  (void)context;
+  vTaskDelay(pdMS_TO_TICKS(kBootGraceMs));
+  gBootGraceOver = true;
+  gBootGraceExpiredEvent = true;
+  vTaskDelete(nullptr);
+}
+
 void setup() {
   Serial.begin(115200);
   delay(100);
@@ -1518,7 +1694,11 @@ void setup() {
   setUserLed(false);
 
   loadConfig();
-  setupPowerManagement();
+  gLsDesired = config.lsEnabled;
+  gBootGraceOver = false;
+  gLsApplied = false;
+  configurePm(false);
+  initBlePmLock();
   if (!applyPreset(config.bootPreset, false)) {
     applyIdlePins();
   }
@@ -1538,9 +1718,11 @@ void setup() {
   }
 
   xTaskCreatePinnedToCore(ledTask, "ledTask", 2048, nullptr, 1, nullptr, 1);
+  xTaskCreatePinnedToCore(bootGraceTask, "bootGrace", 2048, nullptr, 1, nullptr, 1);
 
   // Bring up BLE only after queues/tasks exist so first reconnect write is not lost.
   bleInit();
+  Serial.println("BOOT: grace=10s, type LS ON or LS OFF, then SAVE");
   printPmStatus();
   printStatus();
   printHelp();
@@ -1566,6 +1748,37 @@ void loop() {
       }
     } else {
       lineBuffer += c;
+    }
+  }
+  if (gBootGraceExpiredEvent) {
+    gBootGraceExpiredEvent = false;
+    Serial.println("BOOT: grace over");
+    enqueueCommand("PM_APPLY");
+  }
+  if (gBleDisconnectGraceActive &&
+      static_cast<int32_t>(millis() - gBleDisconnectGraceUntilMs) >= 0) {
+    gBleDisconnectGraceActive = false;
+    Serial.println("BLE: disconnect grace over");
+    enqueueCommand("PM_APPLY_DISC_GRACE");
+  }
+  if (!gBleConnected && static_cast<int32_t>(millis() - gLastAdvWatchdogMs) >= 5000) {
+    gLastAdvWatchdogMs = millis();
+    NimBLEAdvertising *advertising = NimBLEDevice::getAdvertising();
+    if (advertising) {
+      bool isAdvertisingNow = advertising->isAdvertising();
+      if (gBleAdvertising != isAdvertisingNow) {
+        gBleAdvertising = isAdvertisingNow;
+        updateBlePmLock("BLE_ADV_STATE_SYNC");
+      }
+    }
+    if (advertising && !advertising->isAdvertising()) {
+      advertising->setScanResponse(true);
+      advertising->setMinInterval(160);  // 100ms
+      advertising->setMaxInterval(320);  // 200ms
+      advertising->start(0);             // no timeout
+      gBleAdvertising = true;
+      Serial.println("BLE: adv watchdog restart");
+      updateBlePmLock("BLE_ADV_WATCHDOG_RESTART");
     }
   }
   vTaskDelay(pdMS_TO_TICKS(1000));
