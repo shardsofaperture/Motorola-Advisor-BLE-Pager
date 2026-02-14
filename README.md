@@ -1,101 +1,119 @@
-# Advisor II BLE Receiver (POCSAG NRZ Simplified)
+# Advisor II BLE Receiver
 
-Deterministic POCSAG NRZ transmitter for ESP32-S3 using hardware-timed RMT output.
-Configuration lives in SPIFFS at `/config.json`.
+Repository for two deliverables:
 
-## Project roadmap (staged)
-This project is being delivered in stages to reduce risk and validate paging reliability early.
+1. **ESP32 firmware (with power management)** for the XIAO ESP32S3 pager bridge.
+2. **Android app** that forwards Google Messages notifications over BLE.
 
-### Stage 1: Advisor (current)
-- Focus: get the POCSAG NRZ path solid for the original Advisor pager.
-- Status: actively working the POCSAG code to send to the original Advisor.
-- Goal: prove the end-to-end transmit path and capture known-good settings.
+## Repository layout
 
-### Stage 2: Advisor II (next)
-- Focus: transfer the working POCSAG approach to the Advisor II hardware.
-- Status: once the Advisor (Stage 1) path is confirmed, adapt/validate for Advisor II.
-- Goal: establish a repeatable POCSAG baseline on Advisor II.
+- `src/` → **active ESP32 firmware source** (PlatformIO + Arduino + ESP-IDF)
+- `platformio.ini` / `sdkconfig.defaults` / `huge_app.csv` → firmware build configuration
+- `android/native-app/` → **Android app source** (Gradle Kotlin project)
+- `android/tasker/` and `docs/android-tasker.md` → optional Tasker automation assets/docs
+- `src_arduino/` → legacy placeholder (not used for builds)
 
-### Stage 3: FLEX (later)
-- Focus: move from POCSAG to FLEX once the Advisor II baseline is stable.
-- Status: planned after POCSAG is verified on Advisor II.
+> Only the power-management firmware in `src/` is supported and maintained.
 
-## BLE GATT + nRF Connect quick test
+---
+
+## ESP32 firmware (VS Code on macOS)
+
+### Prerequisites
+- macOS with **VS Code**
+- VS Code extension: **PlatformIO IDE**
+- USB data cable for XIAO ESP32S3
+
+### Build and flash
+1. Open this repository root in VS Code.
+2. Confirm `platformio.ini` default environment is `xiao_esp32s3_idfpm`.
+3. Connect the board over USB.
+4. In VS Code terminal:
+   ```zsh
+   pio run
+   ```
+5. Upload firmware:
+   ```zsh
+   pio run -t upload
+   ```
+6. Open serial monitor:
+   ```zsh
+   pio device monitor -b 115200
+   ```
+
+### Quick firmware validation
+Use serial commands:
+- `STATUS`
+- `PING`
+- `SEND_MIN 1422890 0`
+
+### BLE GATT constants
 - Device name: `PagerBridge`
 - Service UUID: `1b0ee9b4-e833-5a9e-354c-7e2d486b2b7f`
 - RX (write) characteristic UUID: `1b0ee9b4-e833-5a9e-354c-7e2d496b2b7f`
 - Status (read/notify) characteristic UUID: `1b0ee9b4-e833-5a9e-354c-7e2d4a6b2b7f`
 
-Test flow (nRF Connect):
-1. Connect to `PagerBridge`.
-2. Write `PING` to the RX characteristic.
-3. Observe a status notify with `PONG\n`.
-4. Write `SEND 123456 0 test message` to the RX characteristic.
-5. Observe `TX_DONE` or `TX_FAIL` status notifications.
+### Wiring
+- ESP32 GND → pager ground
+- XIAO ESP32S3 D3 (GPIO4) → 480 Ω resistor → pager header pin 4
+- Ensure common ground between devices
 
-## How to wire
-- ESP32 GND → pager battery negative / ground
-- ESP32 GPIO (XIAO ESP32S3 **D3** / GPIO4) → 480 Ω series resistor → pager header pin 4
-- D3 on the XIAO ESP32S3 maps to GPIO4.
-- Share ground between the ESP32 and pager.
-- Default output mode is `push_pull` for reliable paging.
+---
 
-## Quick start
-1. Flash the firmware.
-2. Open Serial Monitor @ 115200.
-3. Run the exact commands below to reproduce the paging path:
-   - `STATUS`
-   - `DEBUG_SCOPE`
-   - `SEND_MIN 1422890 0`
+## Android app (VS Code on macOS)
 
-Defaults (ADVISOR preset): baud=512, invertWords=false, driveOneLow=true, idleHigh=true,
-output=push_pull.
+The Android source is in `android/native-app/`.
 
-## If scope looks good but pager still doesn’t decode
-- Toggle `SET output open_drain` vs `SET output push_pull` (open-drain needs an external pull-up).
-- Toggle `SET driveOneLow true/false`.
-- Toggle `SET invertWords true/false`.
-- Try `SET preambleBits 576` vs `SET preambleBits 1024`.
-- Verify you are on header pin 4 (not 7) and ground is solid.
-- Confirm XIAO D3 is GPIO4; if using another pin, `SET dataGpio <pin>`.
+### Prerequisites
+- VS Code
+- JDK 17+
+- Android SDK + platform tools installed
+- Android device with Developer Options + USB debugging enabled
 
-## Commands (Serial @ 115200)
-- `STATUS`
-- `PRESET ADVISOR|GENERIC`
-- `SET <key> <value>`
-- `SAVE` / `LOAD`
-- `H` (send one "H")
-- `SEND <text>` (send arbitrary text)
-- `T1 <seconds>` (repeat `HELLO WORLD`)
-- `SCOPE <ms>`
-- `DEBUG_SCOPE`
-- `SEND_MIN <capcode> <func>`
-- `HELP` / `?`
+### Build from VS Code terminal
+From repo root:
 
-### SET keys
-- `baud` (512/1200/2400)
-- `preambleBits`
-- `capInd`
-- `capGrp`
-- `functionBits`
-- `dataGpio`
-- `output` (`open_drain` / `push_pull`)
-- `invertWords`
-- `driveOneLow`
-- `idleHigh`
+```zsh
+cd android/native-app
+./gradlew assembleDebug
+```
 
-## Bluetooth (Android/Tasker)
-- Device name: `PagerBridge` (BLE GATT server advertises on boot).
-- Write commands by sending a full line ending in newline, e.g. `SEND HELLO\n`.
-- RX (write) characteristic UUID: `1b0ee9b4-e833-5a9e-354c-7e2d496b2b7f`
-- STATUS (read/notify) characteristic UUID: `1b0ee9b4-e833-5a9e-354c-7e2d4a6b2b7f`
-- Service UUID: `1b0ee9b4-e833-5a9e-354c-7e2d486b2b7f`
-- Use `PING` to receive `PONG\n` on the status characteristic.
+APK output:
+- `android/native-app/app/build/outputs/apk/debug/app-debug.apk`
 
-## Android automation assets
-Android automation assets for PagerBLE live in `assets/android/tasker/`.
+### Install to a connected phone
+```zsh
+cd android/native-app
+./gradlew installDebug
+```
 
-- Canonical Tasker project export: `assets/android/tasker/PagerBLE.prj.xml`
-- Legacy duplicate export: `assets/android/tasker/SmstoPager.prj.xml`
-- Known-good constants: `assets/android/tasker/known-good-values.txt`
-- Full setup and troubleshooting guide: `docs/android-tasker.md`
+### First-run phone setup
+1. Open the installed app.
+2. Grant Bluetooth permissions.
+3. Grant notification runtime permission (Android 13+).
+4. Enable notification access for the app.
+
+---
+
+## Operational flow
+
+1. Power and flash the ESP32 firmware.
+2. Confirm BLE advertising as `PagerBridge`.
+3. Install and configure Android app permissions.
+4. Send a test SMS / Google Messages notification.
+5. Verify firmware receives and transmits page payload.
+
+If needed, use nRF Connect to manually test BLE writes with:
+
+```text
+PING\n
+SEND 123456 0 test message\n
+```
+
+---
+
+## Optional Tasker path
+
+If you prefer Tasker automation instead of the native app, use:
+- `android/tasker/SmstoPager.prj.xml`
+- `docs/android-tasker.md`
