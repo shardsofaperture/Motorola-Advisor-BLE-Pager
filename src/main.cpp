@@ -1,21 +1,58 @@
+#include <cctype>
 #include <cstdint>
+#include <cstring>
 #include <string>
 #include <vector>
 
+extern "C" {
+#include "host/ble_hs.h"
+#include "nimble/nimble_port.h"
+#include "nimble/nimble_port_freertos.h"
+#include "os/os_mbuf.h"
+#include "services/gap/ble_svc_gap.h"
+#include "services/gatt/ble_svc_gatt.h"
+}
+
 #include "driver/gpio.h"
-#include "driver/rmt.h"
+#include "driver/rmt_encoder.h"
+#include "driver/rmt_tx.h"
+#include "driver/usb_serial_jtag.h"
 #include "esp_err.h"
 #include "esp_log.h"
+#include "esp_pm.h"
+#include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "nvs_flash.h"
 
 namespace {
 constexpr char kTag[] = "pocsag_tx";
+constexpr char kBleDeviceName[] = "PagerBridge";
+constexpr char kServiceUuidStr[] = "1b0ee9b4-e833-5a9e-354c-7e2d486b2b7f";
+constexpr char kRxUuidStr[] = "1b0ee9b4-e833-5a9e-354c-7e2d496b2b7f";
+constexpr char kStatusUuidStr[] = "1b0ee9b4-e833-5a9e-354c-7e2d4a6b2b7f";
+constexpr int kUserLedGpio = 21;            // XIAO ESP32S3 LED_BUILTIN
+constexpr bool kUserLedActiveHigh = false;  // XIAO user LED is active-low
+constexpr uint32_t kUserLedBootOnMs = 10000;
+constexpr uint32_t kUserLedHeartbeatPeriodMs = 15000;
+constexpr uint32_t kUserLedHeartbeatPulseMs = 150;
+constexpr uint32_t kPmArmDelayMs = 10000;   // stay fully awake for initial debug window
 constexpr uint32_t kSyncWord = 0x7CD215D8;
 constexpr uint32_t kIdleWord = 0x7A89C197;
 constexpr uint32_t kMaxRmtDuration = 32767;
 constexpr size_t kMaxRmtItems = 2000;
+constexpr uint16_t kAdvIntervalMin = 0x0140;  // 200 ms
+constexpr uint16_t kAdvIntervalMax = 0x0280;  // 400 ms
+
+const ble_uuid128_t kServiceUuid = BLE_UUID128_INIT(
+    0x7f, 0x2b, 0x6b, 0x48, 0x2d, 0x7e, 0x4c, 0x35, 0x9e, 0x5a, 0x33, 0xe8, 0xb4, 0xe9, 0x0e, 0x1b);
+const ble_uuid128_t kRxUuid = BLE_UUID128_INIT(
+    0x7f, 0x2b, 0x6b, 0x49, 0x2d, 0x7e, 0x4c, 0x35, 0x9e, 0x5a, 0x33, 0xe8, 0xb4, 0xe9, 0x0e, 0x1b);
+const ble_uuid128_t kStatusUuid = BLE_UUID128_INIT(
+    0x7f, 0x2b, 0x6b, 0x4a, 0x2d, 0x7e, 0x4c, 0x35, 0x9e, 0x5a, 0x33, 0xe8, 0xb4, 0xe9, 0x0e, 0x1b);
+
+enum class InputSource : uint8_t { kSerial = 0, kBle = 1 };
 }
 
 enum class OutputMode : uint8_t { kOpenDrain = 0, kPushPull = 1 };
@@ -39,6 +76,56 @@ struct TxJob {
 };
 
 static QueueHandle_t gTxQueue = nullptr;
+static uint8_t gBleAddrType = 0;
+static uint16_t gBleConnHandle = BLE_HS_CONN_HANDLE_NONE;
+static bool gBleAdvertising = false;
+static bool gPmConfigured = false;
+static bool gBleAddrValid = false;
+static uint8_t gBleAddr[6] = {};
+
+static void process_input_payload(const std::string& payload, InputSource source);
+static int ble_gap_event(struct ble_gap_event* event, void* arg);
+static void start_ble_advertising();
+static void log_ble_status();
+
+static void set_user_led(bool on) {
+  const int onLevel = kUserLedActiveHigh ? 1 : 0;
+  const int offLevel = kUserLedActiveHigh ? 0 : 1;
+  const esp_err_t err = gpio_set_level(static_cast<gpio_num_t>(kUserLedGpio), on ? onLevel : offLevel);
+  if (err != ESP_OK) {
+    ESP_LOGW(kTag, "User LED gpio_set_level failed: 0x%x", err);
+  }
+}
+
+static void init_user_led() {
+  gpio_config_t cfg = {};
+  cfg.pin_bit_mask = 1ULL << static_cast<uint32_t>(kUserLedGpio);
+  cfg.pull_up_en = GPIO_PULLUP_DISABLE;
+  cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
+  cfg.intr_type = GPIO_INTR_DISABLE;
+  cfg.mode = GPIO_MODE_OUTPUT;
+  const esp_err_t cfgErr = gpio_config(&cfg);
+  if (cfgErr != ESP_OK) {
+    ESP_LOGW(kTag, "User LED gpio_config failed: 0x%x", cfgErr);
+    return;
+  }
+  set_user_led(false);
+}
+
+static void user_led_task(void*) {
+  set_user_led(true);
+  vTaskDelay(pdMS_TO_TICKS(kUserLedBootOnMs));
+
+  set_user_led(false);
+  const TickType_t pulseTicks = pdMS_TO_TICKS(kUserLedHeartbeatPulseMs);
+  const TickType_t idleTicks = pdMS_TO_TICKS(kUserLedHeartbeatPeriodMs - kUserLedHeartbeatPulseMs);
+  while (true) {
+    vTaskDelay(idleTicks);
+    set_user_led(true);
+    vTaskDelay(pulseTicks);
+    set_user_led(false);
+  }
+}
 
 static void set_idle_line(int gpio, OutputMode output, bool idleHigh) {
   gpio_config_t cfg = {};
@@ -53,6 +140,8 @@ static void set_idle_line(int gpio, OutputMode output, bool idleHigh) {
 
 class WaveTx {
  public:
+  ~WaveTx() { shutdown_rmt(); }
+
   bool transmit_bits(const std::vector<uint8_t>& bits, const Config& cfg) {
     if (busy_) {
       return false;
@@ -75,14 +164,20 @@ class WaveTx {
       return false;
     }
 
-    const esp_err_t err = rmt_write_items(channel_, items_.data(), items_.size(), true);
+    rmt_transmit_config_t tx_cfg = {};
+    tx_cfg.loop_count = 0;
+    tx_cfg.flags.eot_level = cfg.idleHigh ? 1 : 0;
+
+    esp_err_t err = rmt_transmit(channel_, encoder_, items_.data(),
+                                 items_.size() * sizeof(rmt_symbol_word_t), &tx_cfg);
+    if (err == ESP_OK) {
+      err = rmt_tx_wait_all_done(channel_, -1);
+    }
     if (err != ESP_OK) {
-      ESP_LOGE(kTag, "rmt_write_items failed: 0x%x", err);
+      ESP_LOGE(kTag, "rmt_transmit failed: 0x%x", err);
     }
 
-    rmt_tx_stop(channel_);
-    rmt_driver_uninstall(channel_);
-    initialized_ = false;
+    shutdown_rmt();
     set_idle_line(cfg.dataGpio, cfg.output, cfg.idleHigh);
     busy_ = false;
     return err == ESP_OK;
@@ -90,37 +185,63 @@ class WaveTx {
 
  private:
   bool ensure_rmt(int gpio, OutputMode output, bool idleHigh) {
-    if (initialized_) {
-      rmt_driver_uninstall(channel_);
-      initialized_ = false;
-    }
+    shutdown_rmt();
 
     set_idle_line(gpio, output, idleHigh);
-    rmt_config_t rmt_cfg = {};
-    rmt_cfg.rmt_mode = RMT_MODE_TX;
-    rmt_cfg.channel = channel_;
-    rmt_cfg.gpio_num = static_cast<gpio_num_t>(gpio);
-    rmt_cfg.mem_block_num = 4;
-    rmt_cfg.clk_div = 80;
-    rmt_cfg.tx_config.loop_en = false;
-    rmt_cfg.tx_config.carrier_en = false;
-    rmt_cfg.tx_config.idle_output_en = true;
-    rmt_cfg.tx_config.idle_level = idleHigh ? RMT_IDLE_LEVEL_HIGH : RMT_IDLE_LEVEL_LOW;
+    rmt_tx_channel_config_t tx_channel_cfg = {};
+    tx_channel_cfg.gpio_num = static_cast<gpio_num_t>(gpio);
+    tx_channel_cfg.clk_src = RMT_CLK_SRC_DEFAULT;
+    tx_channel_cfg.resolution_hz = 1000000;
+    tx_channel_cfg.mem_block_symbols = 128;
+    tx_channel_cfg.trans_queue_depth = 1;
+    tx_channel_cfg.flags.io_od_mode = output == OutputMode::kOpenDrain;
 
-    esp_err_t err = rmt_config(&rmt_cfg);
+    esp_err_t err = rmt_new_tx_channel(&tx_channel_cfg, &channel_);
     if (err != ESP_OK) {
-      ESP_LOGE(kTag, "rmt_config failed: 0x%x", err);
+      ESP_LOGE(kTag, "rmt_new_tx_channel failed: 0x%x", err);
       return false;
     }
 
-    err = rmt_driver_install(channel_, 0, 0);
+    rmt_copy_encoder_config_t copy_encoder_cfg = {};
+    err = rmt_new_copy_encoder(&copy_encoder_cfg, &encoder_);
     if (err != ESP_OK) {
-      ESP_LOGE(kTag, "rmt_driver_install failed: 0x%x", err);
+      ESP_LOGE(kTag, "rmt_new_copy_encoder failed: 0x%x", err);
+      shutdown_rmt();
+      return false;
+    }
+
+    err = rmt_enable(channel_);
+    if (err != ESP_OK) {
+      ESP_LOGE(kTag, "rmt_enable failed: 0x%x", err);
+      shutdown_rmt();
       return false;
     }
 
     initialized_ = true;
     return true;
+  }
+
+  void shutdown_rmt() {
+    if (channel_ != nullptr) {
+      const esp_err_t disableErr = rmt_disable(channel_);
+      if (disableErr != ESP_OK && disableErr != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "rmt_disable failed: 0x%x", disableErr);
+      }
+      const esp_err_t delErr = rmt_del_channel(channel_);
+      if (delErr != ESP_OK) {
+        ESP_LOGW(kTag, "rmt_del_channel failed: 0x%x", delErr);
+      }
+      channel_ = nullptr;
+    }
+
+    if (encoder_ != nullptr) {
+      const esp_err_t delErr = rmt_del_encoder(encoder_);
+      if (delErr != ESP_OK) {
+        ESP_LOGW(kTag, "rmt_del_encoder failed: 0x%x", delErr);
+      }
+      encoder_ = nullptr;
+    }
+    initialized_ = false;
   }
 
   void build_items(const std::vector<uint8_t>& bits, uint32_t bitPeriodUs, bool driveOneLow) {
@@ -138,7 +259,7 @@ class WaveTx {
       const bool levelHigh = driveOneLow ? (value == 0) : (value != 0);
       while (totalDuration > 0) {
         const uint32_t chunk = totalDuration > kMaxRmtDuration ? kMaxRmtDuration : totalDuration;
-        rmt_item32_t item = {};
+        rmt_symbol_word_t item = {};
         item.duration0 = chunk > 1 ? chunk - 1 : 1;
         item.level0 = levelHigh;
         item.duration1 = 1;
@@ -156,10 +277,11 @@ class WaveTx {
     }
   }
 
-  rmt_channel_t channel_ = RMT_CHANNEL_0;
+  rmt_channel_handle_t channel_ = nullptr;
+  rmt_encoder_handle_t encoder_ = nullptr;
   bool initialized_ = false;
   bool busy_ = false;
-  std::vector<rmt_item32_t> items_;
+  std::vector<rmt_symbol_word_t> items_;
 };
 
 class PocsagEncoder {
@@ -233,6 +355,25 @@ class PocsagEncoder {
 static PocsagEncoder gEncoder;
 static WaveTx gWaveTx;
 
+static std::string trim_copy(const std::string& in) {
+  size_t start = 0;
+  while (start < in.size() && std::isspace(static_cast<unsigned char>(in[start])) != 0) {
+    ++start;
+  }
+  size_t end = in.size();
+  while (end > start && std::isspace(static_cast<unsigned char>(in[end - 1])) != 0) {
+    --end;
+  }
+  return in.substr(start, end - start);
+}
+
+static std::string to_lower_copy(std::string in) {
+  for (char& c : in) {
+    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  }
+  return in;
+}
+
 static std::vector<uint8_t> build_pocsag_bits(const std::string& message, const Config& cfg) {
   std::vector<uint8_t> bits;
   bits.reserve(cfg.preambleBits + 544);
@@ -258,20 +399,468 @@ static std::vector<uint8_t> build_pocsag_bits(const std::string& message, const 
   return bits;
 }
 
+static bool enqueue_message_page(const std::string& message, TickType_t waitTicks) {
+  const std::vector<uint8_t> bits = build_pocsag_bits(message, gConfig);
+  TxJob* job = new TxJob{bits};
+  if (xQueueSend(gTxQueue, &job, waitTicks) != pdTRUE) {
+    delete job;
+    ESP_LOGW(kTag, "Queue busy; dropped input");
+    return false;
+  }
+  ESP_LOGI(kTag, "Queued: %s", message.c_str());
+  return true;
+}
+
+static void log_status() {
+  const UBaseType_t queued = gTxQueue == nullptr ? 0 : uxQueueMessagesWaiting(gTxQueue);
+  ESP_LOGI(kTag, "status: capcode=%lu func=%u baud=%lu preamble=%lu",
+           static_cast<unsigned long>(gConfig.capInd),
+           static_cast<unsigned>(gConfig.functionBits),
+           static_cast<unsigned long>(gConfig.baud),
+           static_cast<unsigned long>(gConfig.preambleBits));
+  ESP_LOGI(kTag, "status: gpio=%d output=%s idle=%s driveOneLow=%s invertWords=%s queue=%lu",
+           gConfig.dataGpio,
+           gConfig.output == OutputMode::kOpenDrain ? "open-drain" : "push-pull",
+           gConfig.idleHigh ? "high" : "low",
+           gConfig.driveOneLow ? "yes" : "no",
+           gConfig.invertWords ? "yes" : "no",
+           static_cast<unsigned long>(queued));
+  ESP_LOGI(kTag, "status: ble connected=%s advertising=%s",
+           gBleConnHandle == BLE_HS_CONN_HANDLE_NONE ? "no" : "yes",
+           gBleAdvertising ? "yes" : "no");
+  if (gBleAddrValid) {
+    ESP_LOGI(kTag, "status: ble mac=%02x:%02x:%02x:%02x:%02x:%02x",
+             gBleAddr[5], gBleAddr[4], gBleAddr[3], gBleAddr[2], gBleAddr[1], gBleAddr[0]);
+  }
+}
+
+static void configure_power_management() {
+#if CONFIG_PM_ENABLE
+  esp_pm_config_t pm = {};
+  pm.max_freq_mhz = 160;
+  pm.min_freq_mhz = 40;
+  // Light sleep currently causes NimBLE host to become disabled on this target build.
+  // Keep DFS enabled for savings while preserving BLE availability.
+  pm.light_sleep_enable = false;
+  const esp_err_t err = esp_pm_configure(&pm);
+  if (err == ESP_OK) {
+    gPmConfigured = true;
+    ESP_LOGI(kTag, "Power management configured (40-160MHz, light sleep off)");
+  } else {
+    ESP_LOGE(kTag, "esp_pm_configure failed: 0x%x", err);
+  }
+#else
+  ESP_LOGW(kTag, "CONFIG_PM_ENABLE is off; running without PM");
+#endif
+}
+
+static void log_pm_status() {
+#if CONFIG_PM_ENABLE
+  if (!gPmConfigured) {
+    ESP_LOGI(kTag, "pm: pending (arms %lus after boot)",
+             static_cast<unsigned long>(kPmArmDelayMs / 1000));
+    return;
+  }
+  esp_pm_config_t pm = {};
+  const esp_err_t err = esp_pm_get_configuration(&pm);
+  if (err == ESP_OK) {
+    ESP_LOGI(kTag, "pm: enabled max=%dMHz min=%dMHz light_sleep=%s",
+             pm.max_freq_mhz, pm.min_freq_mhz, pm.light_sleep_enable ? "on" : "off");
+  } else {
+    ESP_LOGW(kTag, "pm: enabled but config unavailable (err=0x%x)", err);
+  }
+#else
+  ESP_LOGI(kTag, "pm: disabled in sdkconfig");
+#endif
+}
+
+static void pm_arm_task(void*) {
+  vTaskDelay(pdMS_TO_TICKS(kPmArmDelayMs));
+  configure_power_management();
+  vTaskDelete(nullptr);
+}
+
+static void log_ble_status() {
+  ESP_LOGI(kTag, "ble: name=%s connected=%s advertising=%s interval=%.2f-%.2f s",
+           kBleDeviceName,
+           gBleConnHandle == BLE_HS_CONN_HANDLE_NONE ? "no" : "yes",
+           gBleAdvertising ? "yes" : "no",
+           kAdvIntervalMin * 0.000625f, kAdvIntervalMax * 0.000625f);
+  if (gBleAddrValid) {
+    ESP_LOGI(kTag, "ble: mac=%02x:%02x:%02x:%02x:%02x:%02x",
+             gBleAddr[5], gBleAddr[4], gBleAddr[3], gBleAddr[2], gBleAddr[1], gBleAddr[0]);
+  }
+  ESP_LOGI(kTag, "ble: service=%s", kServiceUuidStr);
+  ESP_LOGI(kTag, "ble: rx=%s status=%s", kRxUuidStr, kStatusUuidStr);
+}
+
+static bool handle_local_command(const std::string& raw) {
+  const std::string cmd = to_lower_copy(trim_copy(raw));
+  if (cmd.empty()) {
+    return true;
+  }
+  if (cmd == "status") {
+    log_status();
+    return true;
+  }
+  if (cmd == "pm" || cmd == "pm status") {
+    log_pm_status();
+    return true;
+  }
+  if (cmd == "ble" || cmd == "ble status") {
+    log_ble_status();
+    return true;
+  }
+  if (cmd == "ble restart") {
+    if (gBleConnHandle != BLE_HS_CONN_HANDLE_NONE) {
+      ESP_LOGI(kTag, "ble: restart ignored while connected");
+      return true;
+    }
+    const int stopRc = ble_gap_adv_stop();
+    if (stopRc != 0 && stopRc != BLE_HS_EALREADY) {
+      ESP_LOGW(kTag, "ble_gap_adv_stop rc=%d", stopRc);
+    }
+    gBleAdvertising = false;
+    start_ble_advertising();
+    return true;
+  }
+  if (cmd == "help" || cmd == "?") {
+    ESP_LOGI(kTag, "Commands: status | pm | ble [status|restart] | ping | reboot | send <message> | help");
+    return true;
+  }
+  if (cmd == "ping") {
+    ESP_LOGI(kTag, "PONG");
+    return true;
+  }
+  if (cmd == "reboot" || cmd == "restart") {
+    ESP_LOGW(kTag, "Reboot requested");
+    esp_restart();
+    return true;
+  }
+  return false;
+}
+
+static void process_input_line(const std::string& rawLine, InputSource source) {
+  const std::string trimmed = trim_copy(rawLine);
+  if (trimmed.empty()) {
+    return;
+  }
+
+  const std::string lowered = to_lower_copy(trimmed);
+  if (handle_local_command(trimmed)) {
+    return;
+  }
+
+  if (lowered == "send") {
+    ESP_LOGI(kTag, "Usage: send <message>");
+    return;
+  }
+
+  if (lowered.rfind("send ", 0) == 0) {
+    const std::string payload = trim_copy(trimmed.substr(4));
+    if (payload.empty()) {
+      ESP_LOGI(kTag, "Usage: send <message>");
+    } else {
+      const TickType_t waitTicks = source == InputSource::kBle ? 0 : pdMS_TO_TICKS(200);
+      enqueue_message_page(payload, waitTicks);
+    }
+    return;
+  }
+
+  if (source == InputSource::kBle) {
+    ESP_LOGW(kTag, "BLE unknown command: %s", trimmed.c_str());
+  } else {
+    ESP_LOGI(kTag, "Unknown command. Use: send <message>, status, pm, ble, ping, reboot, help");
+  }
+}
+
+static void process_input_payload(const std::string& payload, InputSource source) {
+  size_t start = 0;
+  while (start <= payload.size()) {
+    const size_t end = payload.find('\n', start);
+    std::string line = end == std::string::npos ? payload.substr(start)
+                                                 : payload.substr(start, end - start);
+    if (!line.empty() && line.back() == '\r') {
+      line.pop_back();
+    }
+    process_input_line(line, source);
+    if (end == std::string::npos) {
+      break;
+    }
+    start = end + 1;
+  }
+}
+
 static void tx_worker_task(void*) {
   while (true) {
     TxJob* job = nullptr;
     if (xQueueReceive(gTxQueue, &job, portMAX_DELAY) == pdTRUE && job != nullptr) {
       bool ok = gWaveTx.transmit_bits(job->bits, gConfig);
-      ESP_LOGI(kTag, ok ? "TX_DONE" : "TX_FAIL");
+      ESP_LOGI(kTag, "%s", ok ? "TX_DONE" : "TX_FAIL");
       delete job;
     }
   }
 }
 
+static int ble_rx_access(uint16_t, uint16_t, ble_gatt_access_ctxt* ctxt, void*) {
+  if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) {
+    return BLE_ATT_ERR_UNLIKELY;
+  }
+
+  const int length = OS_MBUF_PKTLEN(ctxt->om);
+  if (length <= 0) {
+    return 0;
+  }
+
+  std::string payload(static_cast<size_t>(length), '\0');
+  const int copyRc =
+      os_mbuf_copydata(ctxt->om, 0, length, reinterpret_cast<void*>(payload.data()));
+  if (copyRc != 0) {
+    return BLE_ATT_ERR_UNLIKELY;
+  }
+
+  process_input_payload(payload, InputSource::kBle);
+  return 0;
+}
+
+static int ble_status_access(uint16_t, uint16_t, ble_gatt_access_ctxt* ctxt, void*) {
+  if (ctxt->op != BLE_GATT_ACCESS_OP_READ_CHR) {
+    return BLE_ATT_ERR_UNLIKELY;
+  }
+
+  constexpr char kStatus[] = "READY";
+  if (os_mbuf_append(ctxt->om, kStatus, sizeof(kStatus) - 1) != 0) {
+    return BLE_ATT_ERR_INSUFFICIENT_RES;
+  }
+  return 0;
+}
+
+static ble_gatt_chr_def gBleCharacteristics[] = {
+    {
+        .uuid = &kRxUuid.u,
+        .access_cb = ble_rx_access,
+        .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP,
+    },
+    {
+        .uuid = &kStatusUuid.u,
+        .access_cb = ble_status_access,
+        .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
+    },
+    {
+        0,
+    },
+};
+
+static const ble_gatt_svc_def gBleServices[] = {
+    {
+        .type = BLE_GATT_SVC_TYPE_PRIMARY,
+        .uuid = &kServiceUuid.u,
+        .characteristics = gBleCharacteristics,
+    },
+    {
+        0,
+    },
+};
+
+static void ble_on_reset(int reason) { ESP_LOGW(kTag, "BLE host reset; reason=%d", reason); }
+
+static void ble_on_sync() {
+  int rc = ble_hs_id_infer_auto(0, &gBleAddrType);
+  if (rc != 0) {
+    ESP_LOGE(kTag, "ble_hs_id_infer_auto failed: %d", rc);
+    return;
+  }
+
+  uint8_t addr[6] = {};
+  rc = ble_hs_id_copy_addr(gBleAddrType, addr, nullptr);
+  if (rc == 0) {
+    std::memcpy(gBleAddr, addr, sizeof(addr));
+    gBleAddrValid = true;
+    ESP_LOGI(kTag, "BLE address %02x:%02x:%02x:%02x:%02x:%02x",
+             addr[5], addr[4], addr[3], addr[2], addr[1], addr[0]);
+  }
+  ESP_LOGI(kTag, "BLE service=%s rx=%s status=%s",
+           kServiceUuidStr, kRxUuidStr, kStatusUuidStr);
+  start_ble_advertising();
+}
+
+static int ble_gap_event(struct ble_gap_event* event, void*) {
+  switch (event->type) {
+    case BLE_GAP_EVENT_CONNECT:
+      if (event->connect.status == 0) {
+        gBleConnHandle = event->connect.conn_handle;
+        gBleAdvertising = false;
+        ESP_LOGI(kTag, "BLE connected; handle=%u", static_cast<unsigned>(gBleConnHandle));
+      } else {
+        gBleConnHandle = BLE_HS_CONN_HANDLE_NONE;
+        ESP_LOGW(kTag, "BLE connect failed; status=%d", event->connect.status);
+        start_ble_advertising();
+      }
+      return 0;
+    case BLE_GAP_EVENT_DISCONNECT:
+      ESP_LOGI(kTag, "BLE disconnected; reason=%d", event->disconnect.reason);
+      gBleConnHandle = BLE_HS_CONN_HANDLE_NONE;
+      start_ble_advertising();
+      return 0;
+    case BLE_GAP_EVENT_ADV_COMPLETE:
+      gBleAdvertising = false;
+      start_ble_advertising();
+      return 0;
+    default:
+      return 0;
+  }
+}
+
+static void start_ble_advertising() {
+  ble_hs_adv_fields advFields = {};
+  advFields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
+  advFields.uuids128 = const_cast<ble_uuid128_t*>(&kServiceUuid);
+  advFields.num_uuids128 = 1;
+  advFields.uuids128_is_complete = 1;
+
+  int rc = ble_gap_adv_set_fields(&advFields);
+  if (rc != 0) {
+    ESP_LOGE(kTag, "ble_gap_adv_set_fields failed: %d", rc);
+    return;
+  }
+
+  ble_hs_adv_fields scanRspFields = {};
+  scanRspFields.name = reinterpret_cast<const uint8_t*>(kBleDeviceName);
+  scanRspFields.name_len = std::strlen(kBleDeviceName);
+  scanRspFields.name_is_complete = 1;
+  scanRspFields.tx_pwr_lvl_is_present = 1;
+  scanRspFields.tx_pwr_lvl = BLE_HS_ADV_TX_PWR_LVL_AUTO;
+
+  rc = ble_gap_adv_rsp_set_fields(&scanRspFields);
+  if (rc != 0) {
+    ESP_LOGE(kTag, "ble_gap_adv_rsp_set_fields failed: %d", rc);
+    return;
+  }
+
+  ble_gap_adv_params params = {};
+  params.conn_mode = BLE_GAP_CONN_MODE_UND;
+  params.disc_mode = BLE_GAP_DISC_MODE_GEN;
+  params.itvl_min = kAdvIntervalMin;
+  params.itvl_max = kAdvIntervalMax;
+
+  rc = ble_gap_adv_start(gBleAddrType, nullptr, BLE_HS_FOREVER, &params, ble_gap_event, nullptr);
+  if (rc != 0) {
+    ESP_LOGE(kTag, "ble_gap_adv_start failed: %d", rc);
+    gBleAdvertising = false;
+    return;
+  }
+
+  gBleAdvertising = true;
+  ESP_LOGI(kTag, "BLE advertising as %s (interval %.2f-%.2f s)",
+           kBleDeviceName, kAdvIntervalMin * 0.000625f, kAdvIntervalMax * 0.000625f);
+}
+
+static void ble_host_task(void*) {
+  nimble_port_run();
+  nimble_port_freertos_deinit();
+}
+
+static bool init_ble() {
+  esp_err_t err = nvs_flash_init();
+  if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+    ESP_ERROR_CHECK(nvs_flash_erase());
+    err = nvs_flash_init();
+  }
+  if (err != ESP_OK) {
+    ESP_LOGE(kTag, "nvs_flash_init failed: 0x%x", err);
+    return false;
+  }
+
+  err = nimble_port_init();
+  if (err != ESP_OK) {
+    ESP_LOGE(kTag, "nimble_port_init failed: 0x%x", err);
+    return false;
+  }
+  ble_hs_cfg.reset_cb = ble_on_reset;
+  ble_hs_cfg.sync_cb = ble_on_sync;
+
+  ble_svc_gap_init();
+  ble_svc_gatt_init();
+
+  int rc = 0;
+  rc = ble_svc_gap_device_name_set(kBleDeviceName);
+  if (rc != 0) {
+    ESP_LOGE(kTag, "ble_svc_gap_device_name_set failed: %d", rc);
+    return false;
+  }
+
+  rc = ble_gatts_count_cfg(gBleServices);
+  if (rc != 0) {
+    ESP_LOGE(kTag, "ble_gatts_count_cfg failed: %d", rc);
+    return false;
+  }
+
+  rc = ble_gatts_add_svcs(gBleServices);
+  if (rc != 0) {
+    ESP_LOGE(kTag, "ble_gatts_add_svcs failed: %d", rc);
+    return false;
+  }
+
+  nimble_port_freertos_init(ble_host_task);
+  return true;
+}
+
+static void serial_input_task(void*) {
+  if (!usb_serial_jtag_is_driver_installed()) {
+    usb_serial_jtag_driver_config_t cfg = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
+    if (usb_serial_jtag_driver_install(&cfg) != ESP_OK) {
+      ESP_LOGW(kTag, "USB Serial/JTAG driver install failed; input disabled");
+      vTaskDelete(nullptr);
+    }
+  }
+
+  constexpr size_t kInputMax = 255;
+  std::string message;
+  message.reserve(kInputMax);
+  bool inEscapeSequence = false;
+
+  while (true) {
+    char ch = 0;
+    const int read = usb_serial_jtag_read_bytes(&ch, 1, pdMS_TO_TICKS(250));
+    if (read <= 0) {
+      continue;
+    }
+
+    if (ch == '\r') {
+      continue;
+    }
+    if (ch == '\x1B') {
+      inEscapeSequence = true;
+      continue;
+    }
+    if (inEscapeSequence) {
+      const bool done = (ch == '~') ||
+                        (ch >= 'A' && ch <= 'Z') ||
+                        (ch >= 'a' && ch <= 'z');
+      if (done) {
+        inEscapeSequence = false;
+      }
+      continue;
+    }
+    if (ch != '\n') {
+      if (std::isprint(static_cast<unsigned char>(ch)) != 0 && message.size() < kInputMax) {
+        message.push_back(ch);
+      }
+      continue;
+    }
+
+    if (message.empty()) {
+      continue;
+    }
+    process_input_line(message, InputSource::kSerial);
+    message.clear();
+  }
+}
+
 extern "C" void app_main(void) {
-  ESP_LOGI(kTag, "Starting ESP-IDF POCSAG baseline (no power management)");
+  ESP_LOGI(kTag, "Starting ESP-IDF pager bridge");
   set_idle_line(gConfig.dataGpio, gConfig.output, gConfig.idleHigh);
+  init_user_led();
 
   gTxQueue = xQueueCreate(2, sizeof(TxJob*));
   if (gTxQueue == nullptr) {
@@ -280,11 +869,16 @@ extern "C" void app_main(void) {
   }
 
   xTaskCreatePinnedToCore(tx_worker_task, "tx_worker", 8192, nullptr, 5, nullptr, 0);
+  xTaskCreatePinnedToCore(serial_input_task, "serial_input", 6144, nullptr, 4, nullptr, 0);
+  xTaskCreatePinnedToCore(pm_arm_task, "pm_arm", 3072, nullptr, 2, nullptr, 0);
+  xTaskCreatePinnedToCore(user_led_task, "user_led", 2048, nullptr, 1, nullptr, 0);
 
-  const std::vector<uint8_t> bits = build_pocsag_bits("HELLO WORLD", gConfig);
-  TxJob* bootJob = new TxJob{bits};
-  if (xQueueSend(gTxQueue, &bootJob, 0) != pdTRUE) {
-    delete bootJob;
-    ESP_LOGW(kTag, "Queue busy; boot message not sent");
+  if (!init_ble()) {
+    ESP_LOGE(kTag, "BLE init failed; pager bridge unavailable");
+  } else {
+    ESP_LOGI(kTag, "BLE ready: write 'SEND <message>' to RX characteristic");
   }
+  ESP_LOGI(kTag, "PM arming in %lus; LED on GPIO%d should stay on",
+           static_cast<unsigned long>(kPmArmDelayMs / 1000), kUserLedGpio);
+  ESP_LOGI(kTag, "Type help for serial commands");
 }
