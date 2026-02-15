@@ -4,14 +4,7 @@
 
 #include <vector>
 
-#include "driver/gpio.h"
 #include "driver/rmt.h"
-#if __has_include("esp_pm.h")
-#include "esp_pm.h"
-#define HAS_ESP_PM 1
-#else
-#define HAS_ESP_PM 0
-#endif
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
@@ -21,20 +14,9 @@ constexpr const char *kConfigPath = "/config.json";
 constexpr uint32_t kSyncWord = 0x7CD215D8;
 constexpr uint32_t kIdleWord = 0x7A89C197;
 constexpr uint32_t kMaxRmtDuration = 32767;
-constexpr size_t kMaxRmtItems = 10000;
-constexpr size_t kMaxMessageBatches = 10;
+constexpr size_t kMaxRmtItems = 2000;
 constexpr size_t kMaxBleLineLength = 512;
-constexpr uint32_t kCommandWarmupWindowMs = 150;
-constexpr uint32_t kCommandWarmupDelayMs = 250;
-constexpr int kUserLedPin = 21;
-constexpr TickType_t kBootLedOnTicks = pdMS_TO_TICKS(5000);
-constexpr TickType_t kHeartbeatPeriodTicks = pdMS_TO_TICKS(15000);
-constexpr TickType_t kHeartbeatPulseTicks = pdMS_TO_TICKS(15);
-constexpr uint32_t kBootGraceMs = 10000;
-constexpr uint32_t kBleDisconnectGraceMs = 10000;
-constexpr uint32_t kMaxTxWaitMs = 30000;
-constexpr bool kForceLegacyGpioProfile = true;
-constexpr bool kDisableLightSleepPolicy = true;
+constexpr int kBleRxBlinkPin = 21;
 constexpr const char *kBleServiceUuid = "1b0ee9b4-e833-5a9e-354c-7e2d486b2b7f";
 constexpr const char *kBleRxUuid = "1b0ee9b4-e833-5a9e-354c-7e2d496b2b7f";
 constexpr const char *kBleStatusUuid = "1b0ee9b4-e833-5a9e-354c-7e2d4a6b2b7f";
@@ -54,7 +36,6 @@ struct Config {
   bool driveOneLow = true;
   bool idleHigh = true;
   bool blockingTx = false;
-  bool lsEnabled = true;
   String bootPreset = "ADVISOR";
   bool firstBootShown = false;
 };
@@ -62,11 +43,7 @@ struct Config {
 static Config config;
 
 static void printStatus();
-static void printPmStatus();
 static void handleCommand(const String &line);
-static void applyPmPolicy(const char *reason);
-static void notifyStatus(const char *status, bool alwaysNotify);
-static void logBlePmState(const char *tag);
 static void printErr(const char *tag, esp_err_t err) {
   if (err == ESP_OK) {
     return;
@@ -84,26 +61,9 @@ struct TxJob {
 };
 
 static QueueHandle_t txQueue = nullptr;
-static QueueHandle_t commandQueue = nullptr;
-static bool gPmCompiled = false;
-static bool gPmConfigured = false;
-static esp_err_t gPmConfigureErr = ESP_FAIL;
-static uint32_t gPmMaxFreq = 80;
-static uint32_t gPmMinFreq = 20;
-static bool gPmLightSleepRequested = true;
-static volatile bool gBootGraceOver = false;
-static volatile bool gBootGraceExpiredEvent = false;
-static bool gLsApplied = false;
-static bool gLsDesired = false;
-static volatile bool gTxNoLightSleepLockHeld = false;
-static esp_pm_lock_handle_t sBleNoLightSleepLock = nullptr;
-static bool gBleNoLightSleepLockHeld = false;
-static volatile bool gBleDisconnectGraceActive = false;
-static uint32_t gBleDisconnectGraceUntilMs = 0;
-static uint32_t gLastAdvWatchdogMs = 0;
 
 class WaveTx {
- public:
+public:
   bool isBusy() const { return busy_; }
 
   bool transmitBits(const std::vector<uint8_t> &bits, uint32_t baud, int gpio,
@@ -111,139 +71,41 @@ class WaveTx {
     if (busy_) {
       return false;
     }
-    auto stopAndSetIdle = [&]() {
-      if (initialized_) {
-        rmt_tx_stop(channel_);
-      }
-      setIdle(gpio, output, idleHigh);
-    };
     if (bits.empty()) {
-      stopAndSetIdle();
+      setIdleLine(gpio, output, idleHigh);
       return true;
     }
     uint32_t bitPeriodUs = (1000000 + (baud / 2)) / baud;
     buildItems(bits, bitPeriodUs, driveOneLow);
-    if (overflowed_) {
-      Serial.println("ERR: RMT_ITEMS_OVERFLOW");
-      notifyStatus("TX_TOO_LONG", true);
-      stopAndSetIdle();
-      return false;
-    }
     if (items_.empty()) {
-      stopAndSetIdle();
+      setIdleLine(gpio, output, idleHigh);
       return true;
     }
+    if (initialized_) {
+      rmt_tx_stop(channel_);
+      rmt_driver_uninstall(channel_);
+      initialized_ = false;
+    }
     if (!ensureConfig(gpio, output, idleHigh)) {
-      stopAndSetIdle();
       return false;
     }
-
-    auto cleanupTxState = [&]() {
-      releasePmLock();
-      busy_ = false;
-      if (initialized_) {
-        rmt_tx_stop(channel_);
-      }
-      setIdle(gpio, output, idleHigh);
-    };
-    struct CleanupGuard {
-      decltype(cleanupTxState) &fn;
-      bool active;
-      CleanupGuard(decltype(cleanupTxState) &cleanupFn, bool isActive)
-          : fn(cleanupFn), active(isActive) {}
-      ~CleanupGuard() {
-        if (active) {
-          fn();
-        }
-      }
-    } cleanupGuard{cleanupTxState, false};
-
     busy_ = true;
-    acquirePmLock();
-    cleanupGuard.active = true;
-    setLineDrive(gpio, output, idleHigh);
-
-    bool ok = true;
-    esp_err_t err = rmt_write_items(channel_, items_.data(), items_.size(), false);
+    (void)blockingTx;
+    esp_err_t err = rmt_write_items(channel_, items_.data(), items_.size(), true);
     printErr("rmt_write_items", err);
+    rmt_tx_stop(channel_);
+    rmt_driver_uninstall(channel_);
+    initialized_ = false;
+    setIdleLine(gpio, output, idleHigh);
     if (err != ESP_OK) {
-      ok = false;
+      busy_ = false;
+      return false;
     }
-
-    if (ok) {
-      const TickType_t timeoutTicks = computeTimeoutTicks(bits.size(), baud, blockingTx);
-      err = rmt_wait_tx_done(channel_, timeoutTicks);
-      if (err == ESP_ERR_TIMEOUT) {
-        Serial.println("ERR: RMT_TX_TIMEOUT");
-        ok = false;
-      } else if (err != ESP_OK) {
-        printErr("rmt_wait_tx_done", err);
-        ok = false;
-      }
-    }
-
-    if (!ok) {
-      recoverFromTxFailure(gpio, output, idleHigh);
-    }
-    return ok;
+    busy_ = false;
+    return true;
   }
 
- private:
-  static TickType_t computeTimeoutTicks(size_t bitCount, uint32_t baud, bool blockingTx) {
-    if (baud == 0) {
-      return pdMS_TO_TICKS(kMaxTxWaitMs);
-    }
-    uint64_t txMs = (static_cast<uint64_t>(bitCount) * 1000ULL) / static_cast<uint64_t>(baud);
-    txMs += blockingTx ? 250ULL : 50ULL;
-    if (txMs > static_cast<uint64_t>(kMaxTxWaitMs)) {
-      txMs = kMaxTxWaitMs;
-    }
-    if (txMs == 0ULL) {
-      txMs = 1ULL;
-    }
-    return pdMS_TO_TICKS(static_cast<uint32_t>(txMs));
-  }
-
-  void acquirePmLock() {
-#if HAS_ESP_PM && defined(CONFIG_PM_ENABLE)
-    if (!pmLockInitialized_) {
-      esp_err_t err =
-          esp_pm_lock_create(ESP_PM_NO_LIGHT_SLEEP, 0, "rmt_tx", &pmNoLightSleepLock_);
-      if (err != ESP_OK) {
-        pmNoLightSleepLock_ = nullptr;
-      }
-      pmLockInitialized_ = true;
-    }
-    if (pmNoLightSleepLock_) {
-      esp_err_t err = esp_pm_lock_acquire(pmNoLightSleepLock_);
-      if (err != ESP_OK) {
-        printErr("esp_pm_lock_acquire", err);
-      } else {
-        gTxNoLightSleepLockHeld = true;
-      }
-    } else {
-      gTxNoLightSleepLockHeld = false;
-    }
-#endif
-  }
-
-  void releasePmLock() {
-#if HAS_ESP_PM && defined(CONFIG_PM_ENABLE)
-    if (pmNoLightSleepLock_) {
-      esp_err_t err = esp_pm_lock_release(pmNoLightSleepLock_);
-      if (err != ESP_OK) {
-        printErr("esp_pm_lock_release", err);
-      } else {
-        gTxNoLightSleepLockHeld = false;
-      }
-    } else {
-      gTxNoLightSleepLockHeld = false;
-    }
-#else
-    gTxNoLightSleepLockHeld = false;
-#endif
-  }
-
+private:
   bool ensureConfig(int gpio, OutputMode output, bool idleHigh) {
     if (initialized_ && gpio == gpio_ && output == output_ && idleHigh == idleHigh_) {
       return true;
@@ -255,6 +117,7 @@ class WaveTx {
     gpio_ = gpio;
     output_ = output;
     idleHigh_ = idleHigh;
+    setIdleLine(gpio_, output_, idleHigh_);
     rmt_config_t config = {};
     config.rmt_mode = RMT_MODE_TX;
     config.channel = channel_;
@@ -263,7 +126,7 @@ class WaveTx {
     config.clk_div = 80;
     config.tx_config.loop_en = false;
     config.tx_config.carrier_en = false;
-    config.tx_config.idle_output_en = false;
+    config.tx_config.idle_output_en = true;
     config.tx_config.idle_level = idleHigh_ ? RMT_IDLE_LEVEL_HIGH : RMT_IDLE_LEVEL_LOW;
     esp_err_t err = rmt_config(&config);
     printErr("rmt_config", err);
@@ -279,22 +142,14 @@ class WaveTx {
     return true;
   }
 
-  void recoverFromTxFailure(int gpio, OutputMode output, bool idleHigh) {
-    if (initialized_) {
-      rmt_tx_stop(channel_);
-    }
-    if (initialized_) {
-      rmt_driver_uninstall(channel_);
-      initialized_ = false;
-    }
-    if (!ensureConfig(gpio, output, idleHigh)) {
-      Serial.println("ERR: RMT_RECOVER");
-    }
-  }
-
   void buildItems(const std::vector<uint8_t> &bits, uint32_t bitPeriodUs, bool driveOneLow) {
+    // RMT timing note:
+    // - With clk_div=80, each RMT tick is 1 us (80 MHz / 80).
+    // - At 512 bps, bitPeriodUs is 1953 us. Each bit is represented by a single
+    //   constant-level item whose duration equals the bit period.
+    // - driveOneLow=true inverts the NRZ line mapping (bit=1 -> low, bit=0 -> high).
+    // - idleHigh configures the idle line state after the RMT stream completes.
     items_.clear();
-    overflowed_ = false;
     if (bits.empty()) {
       return;
     }
@@ -323,7 +178,8 @@ class WaveTx {
         }
         items_.push_back(item);
         if (items_.size() > kMaxRmtItems) {
-          overflowed_ = true;
+          Serial.printf("ERR: items too many: %u\n",
+                        static_cast<unsigned int>(items_.size()));
           items_.clear();
           return;
         }
@@ -333,7 +189,7 @@ class WaveTx {
     }
   }
 
-  void setLineDrive(int gpio, OutputMode output, bool idleHigh) {
+  void setIdleLine(int gpio, OutputMode output, bool idleHigh) {
     if (output == OutputMode::kOpenDrain) {
       pinMode(gpio, OUTPUT_OPEN_DRAIN);
     } else {
@@ -342,81 +198,45 @@ class WaveTx {
     digitalWrite(gpio, idleHigh ? HIGH : LOW);
   }
 
-  void setIdle(int gpio, OutputMode output, bool idleHigh) {
-    if (output == OutputMode::kOpenDrain && idleHigh) {
-      pinMode(gpio, OUTPUT_OPEN_DRAIN);
-      digitalWrite(gpio, HIGH);
-      return;
-    }
-    setLineHiZ(gpio);
-  }
-
-  void setLineHiZ(int gpio) {
-    pinMode(gpio, INPUT);
-    gpio_pullup_dis(static_cast<gpio_num_t>(gpio));
-    gpio_pulldown_dis(static_cast<gpio_num_t>(gpio));
-  }
-
   rmt_channel_t channel_ = RMT_CHANNEL_0;
   bool initialized_ = false;
   bool busy_ = false;
-  bool overflowed_ = false;
   int gpio_ = -1;
   OutputMode output_ = OutputMode::kOpenDrain;
   bool idleHigh_ = true;
-#if HAS_ESP_PM && defined(CONFIG_PM_ENABLE)
-  esp_pm_lock_handle_t pmNoLightSleepLock_ = nullptr;
-  bool pmLockInitialized_ = false;
-#endif
   std::vector<rmt_item32_t> items_;
 };
 
 class PocsagEncoder {
- public:
-  std::vector<std::vector<uint32_t>> buildBatchWords(uint32_t capcode, uint8_t functionBits,
-                                                     const String &message) const {
-    return buildAlphaBatches(capcode, functionBits, message);
+public:
+  std::vector<uint32_t> buildBatchWords(uint32_t capcode, uint8_t functionBits,
+                                        const String &message) const {
+    return buildSingleBatch(capcode, functionBits, message);
   }
 
   uint32_t buildAddressCodeword(uint32_t capcode, uint8_t functionBits) const {
     return buildAddressWord(capcode, functionBits);
   }
 
- private:
-  std::vector<std::vector<uint32_t>> buildAlphaBatches(uint32_t capcode, uint8_t functionBits,
-                                                       const String &message) const {
-    std::vector<std::vector<uint32_t>> batches;
+private:
+  std::vector<uint32_t> buildSingleBatch(uint32_t capcode, uint8_t functionBits,
+                                        const String &message) const {
+    std::vector<uint32_t> words(16, kIdleWord);
     uint8_t frame = static_cast<uint8_t>(capcode & 0x7);
     uint32_t addressWord = buildAddressWord(capcode, functionBits);
     std::vector<uint32_t> messageWords = buildAlphaWords(message);
 
-    std::vector<uint32_t> firstBatch(16, kIdleWord);
     size_t index = static_cast<size_t>(frame) * 2;
-    if (index < firstBatch.size()) {
-      firstBatch[index++] = addressWord;
+    if (index < words.size()) {
+      words[index++] = addressWord;
     }
-
-    size_t msgIndex = 0;
-    while (index < firstBatch.size() && msgIndex < messageWords.size()) {
-      firstBatch[index++] = messageWords[msgIndex++];
-    }
-    batches.push_back(firstBatch);
-
-    while (msgIndex < messageWords.size()) {
-      if (batches.size() >= kMaxMessageBatches) {
-        Serial.printf("WARN: message truncated to %u batches\n",
-                      static_cast<unsigned int>(kMaxMessageBatches));
+    for (uint32_t word : messageWords) {
+      if (index >= words.size()) {
         break;
       }
-      std::vector<uint32_t> continuationBatch(16, kIdleWord);
-      size_t continuationIndex = 0;
-      while (continuationIndex < continuationBatch.size() && msgIndex < messageWords.size()) {
-        continuationBatch[continuationIndex++] = messageWords[msgIndex++];
-      }
-      batches.push_back(continuationBatch);
+      words[index++] = word;
     }
-
-    return batches;
+    return words;
   }
 
   std::vector<uint32_t> buildAlphaWords(const String &message) const {
@@ -490,143 +310,29 @@ class PocsagEncoder {
 static PocsagEncoder encoder;
 static WaveTx waveTx;
 static volatile bool gWorkerBusy = false;
-static bool isTxBusy() {
-  return gWorkerBusy || (txQueue && uxQueueMessagesWaiting(txQueue) > 0);
-}
-static bool gBleConnected = false;
-static volatile bool gBleAdvertising = false;
-static uint32_t gBleConnectedAtMs = 0;
 static NimBLECharacteristic *gRxChar = nullptr;
 static NimBLECharacteristic *gStatusChar = nullptr;
-static std::string gLastBlePayload;
-static uint32_t gLastBlePayloadMs = 0;
-constexpr uint32_t kBleDedupeWindowMs = 1500;
-static String gLastSendLine;
-static uint32_t gLastSendLineMs = 0;
-constexpr uint32_t kSendDedupeWindowMs = 2000;
-
-struct CommandJob {
-  String line;
-  uint32_t notBeforeMs;
-};
-
-static String gLastStatus;
-
-static void updateBlePmLock(const char *why) {
-#if HAS_ESP_PM && defined(CONFIG_PM_ENABLE)
-  bool bleActive = gBleConnected || gBleAdvertising;
-  if (bleActive && !gBleNoLightSleepLockHeld && sBleNoLightSleepLock) {
-    esp_err_t err = esp_pm_lock_acquire(sBleNoLightSleepLock);
-    if (err != ESP_OK) {
-      printErr("esp_pm_lock_acquire(ble_active)", err);
-    } else {
-      gBleNoLightSleepLockHeld = true;
-    }
-  } else if (!bleActive && gBleNoLightSleepLockHeld && sBleNoLightSleepLock) {
-    esp_err_t err = esp_pm_lock_release(sBleNoLightSleepLock);
-    if (err != ESP_OK) {
-      printErr("esp_pm_lock_release(ble_active)", err);
-    } else {
-      gBleNoLightSleepLockHeld = false;
-    }
-  }
-#else
-  (void)why;
-#endif
-  logBlePmState(why);
-}
-
-static void initBlePmLock() {
-#if HAS_ESP_PM && defined(CONFIG_PM_ENABLE)
-  if (!sBleNoLightSleepLock) {
-    esp_err_t err =
-        esp_pm_lock_create(ESP_PM_NO_LIGHT_SLEEP, 0, "ble_active", &sBleNoLightSleepLock);
-    if (err != ESP_OK) {
-      printErr("esp_pm_lock_create(ble_active)", err);
-    }
-  }
-#endif
-  updateBlePmLock("BLE_PM_LOCK_INIT");
-}
-
-static void logBlePmState(const char *tag) {
-  bool bleActive = gBleConnected || gBleAdvertising;
-  bool lsPolicyWantsOn = gLsDesired && gBootGraceOver && !gBleConnected && !gBleAdvertising &&
-                         !isTxBusy() && !gBleDisconnectGraceActive;
-  Serial.printf(
-      "BLE_PM[%s] adv=%s conn=%s ble_active=%s ls_req=%s ls_applied=%s pm_ls_cfg=%s "
-      "cpu=%u/%u lock_ble=%s lock_tx=%s heap=%u up_ms=%u\n",
-      tag ? tag : "?", gBleAdvertising ? "1" : "0", gBleConnected ? "1" : "0",
-      bleActive ? "1" : "0", lsPolicyWantsOn ? "1" : "0", gLsApplied ? "1" : "0",
-      gPmLightSleepRequested ? "1" : "0", static_cast<unsigned int>(gPmMaxFreq),
-      static_cast<unsigned int>(gPmMinFreq), gBleNoLightSleepLockHeld ? "1" : "0",
-      gTxNoLightSleepLockHeld ? "1" : "0", static_cast<unsigned int>(ESP.getFreeHeap()),
-      static_cast<unsigned int>(millis()));
-}
-
-static void notifyStatus(const char *status, bool alwaysNotify) {
-  if (!status || !gStatusChar) {
-    return;
-  }
-  String normalized = String(status);
-  normalized.trim();
-  if (!alwaysNotify && normalized == gLastStatus) {
-    return;
-  }
-  gLastStatus = normalized;
-  String payload = normalized + "\n";
-  gStatusChar->setValue(payload.c_str());
-  if (gBleConnected) {
-    gStatusChar->notify();
-  }
-}
-
-static bool enqueueCommand(const String &line, uint32_t notBeforeMs = 0) {
-  if (!commandQueue) {
-    Serial.println("ERR: CMD_QUEUE");
-    notifyStatus("ERR:CMD_QUEUE", true);
-    return false;
-  }
-  CommandJob *job = new CommandJob{line, notBeforeMs};
-  if (xQueueSend(commandQueue, &job, 0) != pdTRUE) {
-    delete job;
-    Serial.println("ERR: CMD_QUEUE_FULL");
-    notifyStatus("ERR:CMD_QUEUE_FULL", true);
-    return false;
-  }
-  return true;
-}
 
 class CommandParser {
- public:
-  void handleInput(const std::string &input, uint32_t notBeforeMs = 0) {
+public:
+  void handleInput(const std::string &input) {
     for (unsigned char c : input) {
       if (c == '\n' || c == '\r') {
-        if (!overflowed_ && lineBuf_.length() > 0) {
-          enqueueCommand(lineBuf_, notBeforeMs);
+        if (lineBuf_.length() > 0) {
+          handleCommand(lineBuf_);
           lineBuf_ = "";
-        } else if (overflowed_) {
-          notifyStatus("ERR:LINE_TOO_LONG", true);
-          lineBuf_ = "";
-          overflowed_ = false;
         }
         continue;
       }
-      if (overflowed_) {
-        continue;
-      }
-      if (lineBuf_.length() >= kMaxBleLineLength) {
-        overflowed_ = true;
-        Serial.println("ERR: BLE command line too long");
-        continue;
-      }
       lineBuf_ += static_cast<char>(c);
+      if (lineBuf_.length() > kMaxBleLineLength) {
+        lineBuf_ = "";
+      }
     }
   }
 
- private:
+private:
   String lineBuf_;
-  bool overflowed_ = false;
 };
 
 struct BleContext {
@@ -638,16 +344,17 @@ static CommandParser gBleParser;
 static BleContext bleContext(&gBleParser);
 
 class RxCallbacks : public NimBLECharacteristicCallbacks {
- public:
+public:
   void onWrite(NimBLECharacteristic *characteristic) override {
     std::string value = characteristic->getValue();
-    uint32_t now = millis();
-    if (value == gLastBlePayload && (now - gLastBlePayloadMs) < kBleDedupeWindowMs) {
-      Serial.println("DROP_DUP_BLE");
-      return;
+    std::string input = value;
+    if (input.empty() || (input.back() != '\n' && input.back() != '\r')) {
+      input.push_back('\n');
     }
-    gLastBlePayload = value;
-    gLastBlePayloadMs = now;
+    static bool blinkState = false;
+    blinkState = !blinkState;
+    digitalWrite(kBleRxBlinkPin, blinkState ? HIGH : LOW);
+
     String preview;
     constexpr size_t kMaxPreview = 80;
     preview.reserve(kMaxPreview);
@@ -664,163 +371,15 @@ class RxCallbacks : public NimBLECharacteristicCallbacks {
     Serial.printf("BLE RX %u bytes: %s\n", static_cast<unsigned int>(value.size()),
                   preview.c_str());
 
-    std::string input = value;
-    if (input.empty() || (input.back() != '\n' && input.back() != '\r')) {
-      input.push_back('\n');
-    }
-
     if (bleContext.parser) {
-      uint32_t delayUntilMs = 0;
-      uint32_t elapsedSinceConnect = now - gBleConnectedAtMs;
-      if (gBleConnected && elapsedSinceConnect < kCommandWarmupWindowMs) {
-        delayUntilMs = gBleConnectedAtMs + kCommandWarmupDelayMs;
-      }
-      bleContext.parser->handleInput(input, delayUntilMs);
+      bleContext.parser->handleInput(input);
     }
   }
 };
-
-class ServerCallbacks : public NimBLEServerCallbacks {
- public:
-  void onConnect(NimBLEServer *server, ble_gap_conn_desc *desc) override {
-    gBleConnected = true;
-    gBleDisconnectGraceActive = false;
-    gBleDisconnectGraceUntilMs = 0;
-    gBleConnectedAtMs = millis();
-    Serial.println("BLE: connected");
-    notifyStatus("CONNECTED", true);
-    NimBLEDevice::getAdvertising()->stop();
-    gBleAdvertising = false;
-    updateBlePmLock("BLE_CONNECT");
-    applyPmPolicy("ble_connect");
-    logBlePmState("BLE_CONNECT_POLICY");
-    server->updateConnParams(desc->conn_handle, 24, 48, 0, 400);
-  }
-
-  void onDisconnect(NimBLEServer *server) override {
-    (void)server;
-    gBleConnected = false;
-    gBleDisconnectGraceActive = true;
-    gBleDisconnectGraceUntilMs = millis() + kBleDisconnectGraceMs;
-    Serial.println("BLE: disconnected");
-    notifyStatus("READY", true);
-    NimBLEAdvertising *advertising = NimBLEDevice::getAdvertising();
-    advertising->setScanResponse(true);
-    advertising->setMinInterval(160);  // 100ms
-    advertising->setMaxInterval(320);  // 200ms
-    advertising->start(0);             // no timeout
-    gBleAdvertising = true;
-    updateBlePmLock("BLE_DISCONNECT_ADV_RESTART");
-    applyPmPolicy("ble_disconnect");
-    logBlePmState("BLE_DISCONNECT_POLICY");
-  }
-
-  void onDisconnect(NimBLEServer *server, ble_gap_conn_desc *desc, int reason) {
-    (void)desc;
-    Serial.printf("BLE: disconnect reason=%d\n", reason);
-    onDisconnect(server);
-  }
-};
-
-static void configurePm(bool enableLightSleep) {
-  if (enableLightSleep) {
-    gPmMaxFreq = 80;
-    gPmMinFreq = 20;
-    gPmLightSleepRequested = true;
-  } else {
-    gPmMaxFreq = 80;
-    gPmMinFreq = 20;
-    gPmLightSleepRequested = false;
-  }
-#if HAS_ESP_PM && defined(CONFIG_PM_ENABLE)
-  gPmCompiled = true;
-#if defined(CONFIG_IDF_TARGET_ESP32S3)
-  esp_pm_config_esp32s3_t pmConfig = {};
-#elif defined(CONFIG_IDF_TARGET_ESP32S2)
-  esp_pm_config_esp32s2_t pmConfig = {};
-#elif defined(CONFIG_IDF_TARGET_ESP32C3)
-  esp_pm_config_esp32c3_t pmConfig = {};
-#elif defined(CONFIG_IDF_TARGET_ESP32H2)
-  esp_pm_config_esp32h2_t pmConfig = {};
-#elif defined(CONFIG_IDF_TARGET_ESP32)
-  esp_pm_config_esp32_t pmConfig = {};
-#else
-  esp_pm_config_t pmConfig = {};
-#endif
-  pmConfig.max_freq_mhz = gPmMaxFreq;
-  pmConfig.min_freq_mhz = gPmMinFreq;
-  pmConfig.light_sleep_enable = gPmLightSleepRequested;
-  gPmConfigureErr = esp_pm_configure(&pmConfig);
-  gPmConfigured = (gPmConfigureErr == ESP_OK);
-  if (gPmConfigured) {
-    Serial.println("PM: enabled DFS/light sleep");
-  } else {
-    Serial.printf("PM: not available (0x%X)\n", static_cast<unsigned int>(gPmConfigureErr));
-  }
-#else
-  gPmCompiled = false;
-  gPmConfigureErr = ESP_FAIL;
-  gPmConfigured = false;
-  gTxNoLightSleepLockHeld = false;
-  Serial.println("PM: not available");
-#endif
-}
-
-static void applyPmPolicy(const char *reason) {
-  if (kDisableLightSleepPolicy) {
-    if (gLsApplied) {
-      configurePm(false);
-      gLsApplied = false;
-    }
-    logBlePmState(reason);
-    return;
-  }
-
-  bool wantLsNow =
-      gLsDesired && gBootGraceOver && !gBleConnected && !gBleAdvertising && !isTxBusy() &&
-      !gBleDisconnectGraceActive;
-  if (wantLsNow == gLsApplied) {
-    logBlePmState(reason);
-    return;
-  }
-
-  configurePm(wantLsNow);
-  gLsApplied = wantLsNow;
-
-  Serial.printf("PM_POLICY: %s -> LS_%s (configured=%s err=0x%X)\n", reason,
-                gLsApplied ? "ON" : "OFF", gPmConfigured ? "yes" : "no",
-                static_cast<unsigned int>(gPmConfigureErr));
-  printPmStatus();
-}
-
-static void printPmStatus() {
-  bool txBusy = gWorkerBusy || (txQueue && uxQueueMessagesWaiting(txQueue) > 0);
-  Serial.println("PM STATUS:");
-  Serial.printf("  compiled: %s\n", gPmCompiled ? "yes" : "no");
-  Serial.printf("  configured: %s (err=0x%X)\n", gPmConfigured ? "yes" : "no",
-                static_cast<unsigned int>(gPmConfigureErr));
-  Serial.printf("  max_freq_mhz: %u\n", static_cast<unsigned int>(gPmMaxFreq));
-  Serial.printf("  min_freq_mhz: %u\n", static_cast<unsigned int>(gPmMinFreq));
-  Serial.printf("  light_sleep_requested: %s\n", gPmLightSleepRequested ? "true" : "false");
-  Serial.printf("  ble_connected: %s\n", gBleConnected ? "true" : "false");
-  Serial.printf("  ble_advertising: %s\n", gBleAdvertising ? "true" : "false");
-  Serial.printf("  tx_busy: %s\n", txBusy ? "true" : "false");
-  Serial.printf("  tx_no_light_sleep_lock_held: %s\n",
-                gTxNoLightSleepLockHeld ? "true" : "false");
-  Serial.printf("  ble_no_light_sleep_lock_held: %s\n",
-                gBleNoLightSleepLockHeld ? "true" : "false");
-  Serial.printf("  ble_disc_grace_active: %s\n",
-                gBleDisconnectGraceActive ? "true" : "false");
-  Serial.printf("  ls_desired: %s\n", gLsDesired ? "ON" : "OFF");
-  Serial.printf("  ls_applied: %s\n", gLsApplied ? "ON" : "OFF");
-  Serial.printf("  boot_grace_over: %s\n", gBootGraceOver ? "true" : "false");
-}
 
 static void bleInit() {
   NimBLEDevice::init("PagerBridge");
-  NimBLEDevice::setPower(ESP_PWR_LVL_P3);
   NimBLEServer *server = NimBLEDevice::createServer();
-  server->setCallbacks(new ServerCallbacks());
   NimBLEService *service = server->createService(kBleServiceUuid);
   gRxChar = service->createCharacteristic(
       kBleRxUuid, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
@@ -832,12 +391,8 @@ static void bleInit() {
   NimBLEAdvertising *advertising = NimBLEDevice::getAdvertising();
   advertising->addServiceUUID(service->getUUID());
   advertising->setScanResponse(true);
-  advertising->setMinInterval(160);  // 100ms
-  advertising->setMaxInterval(320);  // 200ms
-  advertising->start(0);             // no timeout
-  gBleAdvertising = true;
-  updateBlePmLock("BLE_ADV_START_INIT");
-  notifyStatus("READY", true);
+  advertising->start();
+  gStatusChar->notify();
 }
 
 static void txWorkerTask(void *context) {
@@ -849,30 +404,13 @@ static void txWorkerTask(void *context) {
     }
     gWorkerBusy = true;
     bool ok = waveTx.transmitBits(job->bits, job->baud, job->gpio, job->output, job->idleHigh,
-                                  job->driveOneLow, config.blockingTx);
+                                  job->driveOneLow, true);
     gWorkerBusy = false;
     Serial.println(ok ? "TX_DONE" : "TX_FAIL");
-    notifyStatus(ok ? "TX_DONE" : "TX_FAIL", true);
-    applyPmPolicy(ok ? "tx_done" : "tx_fail");
-    if (gStatusChar && gLastStatus != "TX_IDLE") {
-      notifyStatus("TX_IDLE", false);
+    if (gStatusChar) {
+      gStatusChar->setValue(ok ? "TX_DONE\n" : "TX_FAIL\n");
+      gStatusChar->notify();
     }
-    delete job;
-  }
-}
-
-static void commandWorkerTask(void *context) {
-  (void)context;
-  while (true) {
-    CommandJob *job = nullptr;
-    if (xQueueReceive(commandQueue, &job, portMAX_DELAY) != pdTRUE || job == nullptr) {
-      continue;
-    }
-    uint32_t now = millis();
-    if (job->notBeforeMs != 0 && static_cast<int32_t>(job->notBeforeMs - now) > 0) {
-      vTaskDelay(pdMS_TO_TICKS(job->notBeforeMs - now));
-    }
-    handleCommand(job->line);
     delete job;
   }
 }
@@ -914,7 +452,7 @@ static bool extractJsonValue(const String &json, const char *key, String &out) {
   }
   int end = start;
   while (end < json.length() && json[end] != ',' && json[end] != '}' &&
-         json[end] != '\n' && json[end] != '\r') {
+        json[end] != '\n' && json[end] != '\r') {
     ++end;
   }
   out = json.substring(start, end);
@@ -950,21 +488,13 @@ static bool parseOutputMode(const String &value, OutputMode &out) {
   return false;
 }
 
-static void applyIdlePins() {
-  if (kForceLegacyGpioProfile) {
-    config.dataGpio = 4;
-    config.output = OutputMode::kOpenDrain;
-    config.driveOneLow = true;
-    config.idleHigh = true;
-  }
-  if (config.output == OutputMode::kOpenDrain && config.idleHigh) {
+static void applyConfigPins() {
+  if (config.output == OutputMode::kOpenDrain) {
     pinMode(config.dataGpio, OUTPUT_OPEN_DRAIN);
-    digitalWrite(config.dataGpio, HIGH);
-    return;
+  } else {
+    pinMode(config.dataGpio, OUTPUT);
   }
-  pinMode(config.dataGpio, INPUT);
-  gpio_pullup_dis(static_cast<gpio_num_t>(config.dataGpio));
-  gpio_pulldown_dis(static_cast<gpio_num_t>(config.dataGpio));
+  digitalWrite(config.dataGpio, config.idleHigh ? HIGH : LOW);
 }
 
 static bool applyPreset(const String &name, bool report) {
@@ -977,7 +507,7 @@ static bool applyPreset(const String &name, bool report) {
     config.capGrp = 1422890;
     config.functionBits = 2;
     config.dataGpio = 4;
-    config.output = OutputMode::kOpenDrain;
+    config.output = OutputMode::kPushPull;
     config.invertWords = false;
     config.driveOneLow = true;
     config.idleHigh = true;
@@ -998,7 +528,7 @@ static bool applyPreset(const String &name, bool report) {
     }
     return false;
   }
-  applyIdlePins();
+  applyConfigPins();
   if (report) {
     Serial.printf("OK PRESET %s\n", normalized.c_str());
     printStatus();
@@ -1026,7 +556,6 @@ static void writeConfigFile() {
   file.printf("  \"idleHigh\": %s,\n", config.idleHigh ? "true" : "false");
   file.printf("  \"blockingTx\": %s,\n", config.blockingTx ? "true" : "false");
   file.printf("  \"bootPreset\": \"%s\",\n", config.bootPreset.c_str());
-  file.printf("  \"lsEnabled\": %s,\n", config.lsEnabled ? "true" : "false");
   file.printf("  \"firstBootShown\": %s\n", config.firstBootShown ? "true" : "false");
   file.println("}");
   file.close();
@@ -1108,9 +637,6 @@ static bool loadConfig() {
   }
   if (extractJsonValue(json, "firstBootShown", value)) {
     parseBool(value, config.firstBootShown);
-  }
-  if (extractJsonValue(json, "lsEnabled", value)) {
-    parseBool(value, config.lsEnabled);
   }
   if (!sawNewPreambleBits && sawLegacyPreambleMs) {
     config.preambleBits = (legacyPreambleMs * config.baud) / 1000;
@@ -1209,33 +735,33 @@ static uint32_t computeRepeatBatches(uint32_t repeatMs, uint32_t baud) {
   return totalBatches;
 }
 
-static std::vector<uint8_t> buildPocsagBits(const String &message, uint32_t capcode,
-                                            uint32_t preambleBits) {
+[[maybe_unused]] static std::vector<uint8_t> buildPocsagBits(const String &message,
+                                                             uint32_t capcode,
+                                                             uint32_t preambleBits) {
+  std::vector<uint32_t> words;
+  words.reserve(17);
   std::vector<uint8_t> bits;
   if (preambleBits > 0) {
-    bits.reserve(preambleBits);
     for (uint32_t i = 0; i < preambleBits; ++i) {
       bits.push_back(static_cast<uint8_t>(i % 2 == 0));
     }
   }
-
-  std::vector<std::vector<uint32_t>> batches =
-      encoder.buildBatchWords(capcode, config.functionBits, message);
-  bits.reserve(bits.size() + (batches.size() * 544));
-
-  for (std::vector<uint32_t> &batch : batches) {
-    applyWordInversion(batch, config.invertWords);
-    std::vector<uint8_t> batchBits = buildSyncAndBatchBits(batch, config.invertWords);
-    bits.insert(bits.end(), batchBits.begin(), batchBits.end());
+  words = encoder.buildBatchWords(capcode, config.functionBits, message);
+  applyWordInversion(words, config.invertWords);
+  uint32_t syncWord = config.invertWords ? ~kSyncWord : kSyncWord;
+  for (int i = 31; i >= 0; --i) {
+    bits.push_back(static_cast<uint8_t>((syncWord >> i) & 0x1));
   }
-
+  for (uint32_t word : words) {
+    for (int i = 31; i >= 0; --i) {
+      bits.push_back(static_cast<uint8_t>((word >> i) & 0x1));
+    }
+  }
   return bits;
 }
 
-[[maybe_unused]] static std::vector<uint8_t> buildRepeatedPocsagBits(const String &message,
-                                                                     uint32_t capcode,
-                                                                     uint32_t preambleBits,
-                                                                     uint32_t repeatMs) {
+static std::vector<uint8_t> buildRepeatedPocsagBits(const String &message, uint32_t capcode,
+                                                    uint32_t preambleBits, uint32_t repeatMs) {
   std::vector<uint8_t> bits;
   if (preambleBits > 0) {
     bits.reserve(preambleBits);
@@ -1243,28 +769,20 @@ static std::vector<uint8_t> buildPocsagBits(const String &message, uint32_t capc
       bits.push_back(static_cast<uint8_t>(i % 2 == 0));
     }
   }
-
-  std::vector<uint8_t> oneMessageBits;
-  std::vector<std::vector<uint32_t>> batches =
-      encoder.buildBatchWords(capcode, config.functionBits, message);
-  oneMessageBits.reserve(batches.size() * 544);
-  for (std::vector<uint32_t> &batch : batches) {
-    applyWordInversion(batch, config.invertWords);
-    std::vector<uint8_t> batchBits = buildSyncAndBatchBits(batch, config.invertWords);
-    oneMessageBits.insert(oneMessageBits.end(), batchBits.begin(), batchBits.end());
-  }
-
+  std::vector<uint32_t> words = encoder.buildBatchWords(capcode, config.functionBits, message);
+  applyWordInversion(words, config.invertWords);
+  std::vector<uint8_t> batchBits = buildSyncAndBatchBits(words, config.invertWords);
   uint32_t totalBatches = computeRepeatBatches(repeatMs, config.baud);
-  bits.reserve(bits.size() + (oneMessageBits.size() * totalBatches));
+  bits.reserve(bits.size() + (batchBits.size() * totalBatches));
   for (uint32_t i = 0; i < totalBatches; ++i) {
-    bits.insert(bits.end(), oneMessageBits.begin(), oneMessageBits.end());
+    bits.insert(bits.end(), batchBits.begin(), batchBits.end());
   }
   return bits;
 }
 
 [[maybe_unused]] static std::vector<uint8_t> buildMinimalPocsagBits(uint32_t capcode,
-                                                                    uint8_t functionBits,
-                                                                    uint32_t preambleMs) {
+                                                                     uint8_t functionBits,
+                                                                     uint32_t preambleMs) {
   std::vector<uint8_t> bits = buildAlternatingBits(preambleMs, config.baud);
   std::vector<uint32_t> words = buildMinimalBatch(capcode, functionBits);
   applyWordInversion(words, config.invertWords);
@@ -1274,7 +792,7 @@ static std::vector<uint8_t> buildPocsagBits(const String &message, uint32_t capc
 }
 
 static std::vector<uint8_t> buildRepeatedMinimalBits(uint32_t capcode, uint8_t functionBits,
-                                                     uint32_t preambleMs, uint32_t repeatMs) {
+                                                    uint32_t preambleMs, uint32_t repeatMs) {
   std::vector<uint8_t> bits = buildAlternatingBits(preambleMs, config.baud);
   std::vector<uint32_t> words = buildMinimalBatch(capcode, functionBits);
   applyWordInversion(words, config.invertWords);
@@ -1294,67 +812,23 @@ static bool queueTxJob(const std::vector<uint8_t> &bits) {
   }
   if (gWorkerBusy || uxQueueSpacesAvailable(txQueue) == 0) {
     Serial.println("TX_BUSY");
-    notifyStatus("TX_BUSY", true);
     return false;
   }
   TxJob *job = new TxJob{bits, config.baud, config.dataGpio, config.output, config.idleHigh,
-                         config.driveOneLow};
+                        config.driveOneLow};
   if (xQueueSend(txQueue, &job, 0) != pdTRUE) {
     delete job;
     Serial.println("TX_BUSY");
-    notifyStatus("TX_BUSY", true);
     return false;
   }
   Serial.println("QUEUED");
-  notifyStatus("TX_BUSY", true);
-  applyPmPolicy("tx_queued");
   return true;
 }
 
-static bool isLikelyMessageId(const String &token) {
-  if (token.startsWith("id:") || token.startsWith("ID:")) {
-    return true;
-  }
-  if (token.length() == 0 || token.length() > 24) {
-    return false;
-  }
-  for (size_t i = 0; i < token.length(); ++i) {
-    if (!isAlphaNumeric(static_cast<unsigned char>(token[i])) && token[i] != '-' &&
-        token[i] != '_') {
-      return false;
-    }
-  }
-  bool hasDigit = false;
-  for (size_t i = 0; i < token.length(); ++i) {
-    if (isDigit(static_cast<unsigned char>(token[i]))) {
-      hasDigit = true;
-      break;
-    }
-  }
-  return hasDigit;
-}
-
-static String normalizeWhitespaceLower(const String &input) {
-  String out;
-  bool prevSpace = false;
-  for (size_t i = 0; i < input.length(); ++i) {
-    char c = input[i];
-    if (isspace(static_cast<unsigned char>(c))) {
-      if (!prevSpace && out.length() > 0) {
-        out += ' ';
-      }
-      prevSpace = true;
-      continue;
-    }
-    prevSpace = false;
-    out += static_cast<char>(tolower(static_cast<unsigned char>(c)));
-  }
-  out.trim();
-  return out;
-}
-
 static bool sendMessageOnce(const String &message, uint32_t capcode) {
-  std::vector<uint8_t> bits = buildPocsagBits(message, capcode, config.preambleBits);
+  // Use a longer repeat window to improve pager decode reliability.
+  std::vector<uint8_t> bits =
+      buildRepeatedPocsagBits(message, capcode, config.preambleBits, 8000);
   return queueTxJob(bits);
 }
 
@@ -1413,24 +887,12 @@ static void applySetCommand(const String &key, const String &value) {
   } else if (normalizedKey == "preamblebits") {
     config.preambleBits = static_cast<uint32_t>(value.toInt());
   } else if (normalizedKey == "idlehigh") {
-    if (kForceLegacyGpioProfile) {
-      Serial.println("LOCKED: idleHigh=true");
-      return;
-    }
     parseBool(value, config.idleHigh);
   } else if (normalizedKey == "output") {
-    if (kForceLegacyGpioProfile) {
-      Serial.println("LOCKED: output=open_drain");
-      return;
-    }
     parseOutputMode(value, config.output);
   } else if (normalizedKey == "invertwords") {
     parseBool(value, config.invertWords);
   } else if (normalizedKey == "driveonelow") {
-    if (kForceLegacyGpioProfile) {
-      Serial.println("LOCKED: driveOneLow=true");
-      return;
-    }
     parseBool(value, config.driveOneLow);
   } else if (normalizedKey == "blockingtx") {
     parseBool(value, config.blockingTx);
@@ -1441,10 +903,6 @@ static void applySetCommand(const String &key, const String &value) {
   } else if (normalizedKey == "functionbits") {
     config.functionBits = static_cast<uint8_t>(value.toInt() & 0x3);
   } else if (normalizedKey == "datagpio") {
-    if (kForceLegacyGpioProfile) {
-      Serial.println("LOCKED: dataGpio=4");
-      return;
-    }
     int dataGpio = value.toInt();
     if (dataGpio > 0) {
       config.dataGpio = dataGpio;
@@ -1456,16 +914,16 @@ static void applySetCommand(const String &key, const String &value) {
     return;
   }
 
-  applyIdlePins();
+  applyConfigPins();
   Serial.println("OK");
 }
 
 static void printHelp() {
   Serial.println("POCSAG TX (RMT) Commands:");
   Serial.println(
-      "  STATUS | PM | PM_STATUS | HELP | ? | PRESET <name> | SCOPE <ms> | DEBUG_SCOPE | H | SEND <text> | "
+      "  STATUS | HELP | ? | PRESET <name> | SCOPE <ms> | DEBUG_SCOPE | H | SEND <text> | "
       "SEND_MIN <capcode> [func] [repeatMs] | DUMP_MIN <capcode> <func> | STATUS_TX | T1 <sec>");
-  Serial.println("  SET <key> <value> | SAVE | LOAD | LS ON | LS OFF | LS | LS STATUS");
+  Serial.println("  SET <key> <value> | SAVE | LOAD");
   Serial.println("Presets: ADVISOR | GENERIC");
   Serial.println("SET keys: baud preambleBits capInd capGrp functionBits dataGpio output");
   Serial.println("          invertWords driveOneLow idleHigh blockingTx");
@@ -1481,7 +939,7 @@ static void printHelp() {
   Serial.println("  DUMP_MIN 1422890 2");
   Serial.println("  T1 10");
   Serial.println(
-      "ADVISOR preset: baud=512 invertWords=false driveOneLow=true idleHigh=true output=open_drain");
+      "ADVISOR preset: baud=512 invertWords=false driveOneLow=true idleHigh=true output=push_pull");
   Serial.printf(
       "Defaults: baud=%u preambleBits=%u output=%s dataGpio=%d invertWords=%s driveOneLow=%s idleHigh=%s\n",
       config.baud, config.preambleBits,
@@ -1496,96 +954,19 @@ static void handleCommand(const String &line) {
   if (trimmed.length() == 0) {
     return;
   }
-  Serial.printf("CMD: [%s]\n", trimmed.c_str());
   int space = trimmed.indexOf(' ');
   String cmd = (space < 0) ? trimmed : trimmed.substring(0, space);
   cmd.toUpperCase();
-
-  if (cmd == "SEND") {
-    String msgOnly = (space < 0) ? "" : trimmed.substring(space + 1);
-    msgOnly.trim();
-    int secondSpace = msgOnly.indexOf(' ');
-    String firstToken = (secondSpace < 0) ? msgOnly : msgOnly.substring(0, secondSpace);
-    String remainder = (secondSpace < 0) ? "" : msgOnly.substring(secondSpace + 1);
-    remainder.trim();
-
-    String key;
-    if (secondSpace > 0 && remainder.length() > 0 && isLikelyMessageId(firstToken)) {
-      key = String("id:") + normalizeWhitespaceLower(firstToken);
-    } else {
-      key = String("msg:") + normalizeWhitespaceLower(msgOnly);
-    }
-    uint32_t now = millis();
-    if (key == gLastSendLine && (now - gLastSendLineMs) < kSendDedupeWindowMs) {
-      Serial.println("DROP_DUP_SEND");
-      notifyStatus("DROP_DUP", true);
-      return;
-    }
-    gLastSendLine = key;
-    gLastSendLineMs = now;
-  }
 
   if (cmd == "STATUS") {
     printStatus();
     return;
   }
-  if (cmd == "PM") {
-    printPmStatus();
-    return;
-  }
-  if (cmd == "PM_STATUS") {
-    printPmStatus();
-    return;
-  }
-  if (cmd == "PM_APPLY") {
-    applyPmPolicy("boot_grace_end");
-    return;
-  }
-  if (cmd == "PM_APPLY_DISC_GRACE") {
-    applyPmPolicy("ble_disc_grace_end");
-    return;
-  }
-  if (cmd == "LS_STATUS") {
-    Serial.printf("LS: desired=%s applied=%s grace_over=%s ble_connected=%s\n",
-                  gLsDesired ? "ON" : "OFF", gLsApplied ? "ON" : "OFF",
-                  gBootGraceOver ? "true" : "false", gBleConnected ? "true" : "false");
-    return;
-  }
-  if (cmd == "LS") {
-    if (kDisableLightSleepPolicy) {
-      gLsDesired = false;
-      config.lsEnabled = false;
-      Serial.println("LS: disabled in legacy GPIO mode");
-      return;
-    }
-    String arg = (space < 0) ? "" : trimmed.substring(space + 1);
-    arg.trim();
-    arg.toUpperCase();
-    if (arg == "ON") {
-      gLsDesired = true;
-      config.lsEnabled = true;
-      Serial.println("OK LS ON");
-      applyPmPolicy("serial_ls_on");
-      return;
-    }
-    if (arg == "OFF") {
-      gLsDesired = false;
-      config.lsEnabled = false;
-      Serial.println("OK LS OFF");
-      applyPmPolicy("serial_ls_off");
-      return;
-    }
-    if (arg.length() == 0 || arg == "STATUS") {
-      Serial.printf("LS: desired=%s applied=%s grace_over=%s ble_connected=%s\n",
-                    gLsDesired ? "ON" : "OFF", gLsApplied ? "ON" : "OFF",
-                    gBootGraceOver ? "true" : "false", gBleConnected ? "true" : "false");
-      return;
-    }
-    Serial.println("ERR: LS ON|OFF|STATUS");
-    return;
-  }
   if (cmd == "PING") {
-    notifyStatus("CONNECTED", true);
+    if (gStatusChar) {
+      gStatusChar->setValue("PONG\n");
+      gStatusChar->notify();
+    }
     Serial.println("PONG");
     return;
   }
@@ -1601,12 +982,7 @@ static void handleCommand(const String &line) {
   }
   if (cmd == "LOAD") {
     loadConfig();
-    gLsDesired = kDisableLightSleepPolicy ? false : config.lsEnabled;
-    if (kDisableLightSleepPolicy) {
-      config.lsEnabled = false;
-    }
-    applyIdlePins();
-    applyPmPolicy("load_config");
+    applyConfigPins();
     Serial.println("LOADED");
     return;
   }
@@ -1648,7 +1024,7 @@ static void handleCommand(const String &line) {
       int thirdSpace = trimmed.indexOf(' ', secondSpace + 1);
       String funcValue =
           (thirdSpace < 0) ? trimmed.substring(secondSpace + 1)
-                           : trimmed.substring(secondSpace + 1, thirdSpace);
+                          : trimmed.substring(secondSpace + 1, thirdSpace);
       functionBits = static_cast<uint8_t>(funcValue.toInt() & 0x3);
       if (thirdSpace >= 0) {
         repeatMs = static_cast<uint32_t>(trimmed.substring(thirdSpace + 1).toInt());
@@ -1701,75 +1077,23 @@ static void handleCommand(const String &line) {
   Serial.println("ERR: unknown command");
 }
 
-static inline void setUserLed(bool on) {
-  digitalWrite(kUserLedPin, on ? LOW : HIGH);
-}
-
-static void ledTask(void *context) {
-  (void)context;
-  // Active-low LED: ON at boot for 5s, then short heartbeat pulse every 15s.
-  setUserLed(true);
-  vTaskDelay(kBootLedOnTicks);
-  setUserLed(false);
-  TickType_t lastWake = xTaskGetTickCount();
-  while (true) {
-    vTaskDelayUntil(&lastWake, kHeartbeatPeriodTicks);
-    setUserLed(true);
-    vTaskDelay(kHeartbeatPulseTicks);
-    setUserLed(false);
-  }
-}
-
-static void bootGraceTask(void *context) {
-  (void)context;
-  vTaskDelay(pdMS_TO_TICKS(kBootGraceMs));
-  gBootGraceOver = true;
-  gBootGraceExpiredEvent = true;
-  vTaskDelete(nullptr);
-}
-
 void setup() {
   Serial.begin(115200);
   delay(100);
-
-  // USER LED on XIAO ESP32-S3 is active-low. Keep OFF by default.
-  pinMode(kUserLedPin, OUTPUT);
-  setUserLed(false);
-
+  pinMode(kBleRxBlinkPin, OUTPUT);
+  digitalWrite(kBleRxBlinkPin, LOW);
   loadConfig();
-  if (kDisableLightSleepPolicy) {
-    config.lsEnabled = false;
-  }
-  gLsDesired = config.lsEnabled;
-  gBootGraceOver = false;
-  gLsApplied = false;
-  configurePm(false);
-  initBlePmLock();
   if (!applyPreset(config.bootPreset, false)) {
-    applyIdlePins();
+    applyConfigPins();
   }
-  applyIdlePins();
-
-  txQueue = xQueueCreate(4, sizeof(TxJob *));
-  commandQueue = xQueueCreate(8, sizeof(CommandJob *));
+  applyConfigPins();
+  bleInit();
+  txQueue = xQueueCreate(2, sizeof(TxJob *));
   if (txQueue) {
     xTaskCreatePinnedToCore(txWorkerTask, "txWorker", 8192, nullptr, 1, nullptr, 0);
   } else {
     Serial.println("ERR: TX_QUEUE_CREATE");
   }
-  if (commandQueue) {
-    xTaskCreatePinnedToCore(commandWorkerTask, "cmdWorker", 6144, nullptr, 1, nullptr, 1);
-  } else {
-    Serial.println("ERR: CMD_QUEUE_CREATE");
-  }
-
-  xTaskCreatePinnedToCore(ledTask, "ledTask", 2048, nullptr, 1, nullptr, 1);
-  xTaskCreatePinnedToCore(bootGraceTask, "bootGrace", 2048, nullptr, 1, nullptr, 1);
-
-  // Bring up BLE only after queues/tasks exist so first reconnect write is not lost.
-  bleInit();
-  Serial.println("BOOT: grace=10s, type LS ON or LS OFF, then SAVE");
-  printPmStatus();
   printStatus();
   printHelp();
   if (!config.firstBootShown) {
@@ -1778,77 +1102,29 @@ void setup() {
   }
 }
 
-// Manual acceptance tests:
-// 1) Verify repeated SEND commands (20+) do not hang and do not overlap (no TX_BUSY stuck forever).
-// 2) Verify that after TX_DONE/TX_FAIL the data GPIO is Hi-Z (idle).
-// 3) Verify BLE reconnect and immediate write is not dropped.
-// 4) Verify LED still does 5s solid then 15s heartbeat pulse.
 void loop() {
   static String lineBuffer;
   while (Serial.available() > 0) {
     char c = static_cast<char>(Serial.read());
     if (c == '\n' || c == '\r') {
       if (lineBuffer.length() > 0) {
-        enqueueCommand(lineBuffer);
+        handleCommand(lineBuffer);
         lineBuffer = "";
       }
     } else {
       lineBuffer += c;
     }
   }
-  if (gBootGraceExpiredEvent) {
-    gBootGraceExpiredEvent = false;
-    Serial.println("BOOT: grace over");
-    enqueueCommand("PM_APPLY");
-  }
-  if (gBleDisconnectGraceActive &&
-      static_cast<int32_t>(millis() - gBleDisconnectGraceUntilMs) >= 0) {
-    gBleDisconnectGraceActive = false;
-    Serial.println("BLE: disconnect grace over");
-    enqueueCommand("PM_APPLY_DISC_GRACE");
-  }
-  if (!gBleConnected && static_cast<int32_t>(millis() - gLastAdvWatchdogMs) >= 5000) {
-    gLastAdvWatchdogMs = millis();
-    NimBLEAdvertising *advertising = NimBLEDevice::getAdvertising();
-    if (advertising) {
-      bool isAdvertisingNow = advertising->isAdvertising();
-      if (gBleAdvertising != isAdvertisingNow) {
-        gBleAdvertising = isAdvertisingNow;
-        updateBlePmLock("BLE_ADV_STATE_SYNC");
-      }
-    }
-    if (advertising && !advertising->isAdvertising()) {
-      advertising->setScanResponse(true);
-      advertising->setMinInterval(160);  // 100ms
-      advertising->setMaxInterval(320);  // 200ms
-      advertising->start(0);             // no timeout
-      gBleAdvertising = true;
-      Serial.println("BLE: adv watchdog restart");
-      updateBlePmLock("BLE_ADV_WATCHDOG_RESTART");
-    }
-  }
-  vTaskDelay(pdMS_TO_TICKS(1000));
+  delay(2);
 }
 
-#if !defined(CONFIG_AUTOSTART_ARDUINO) || !CONFIG_AUTOSTART_ARDUINO
-namespace {
-TaskHandle_t gArduinoLoopTaskHandle = nullptr;
-
-void arduinoLoopTask(void *context) {
-  (void)context;
+#if defined(ESP_PLATFORM) && defined(USE_IDFPM_APP_MAIN)
+extern "C" void app_main(void) {
+  initArduino();
   setup();
   while (true) {
     loop();
-    if (serialEventRun) {
-      serialEventRun();
-    }
+    vTaskDelay(1);
   }
-}
-}
-
-extern "C" void app_main() {
-  initArduino();
-  xTaskCreateUniversal(arduinoLoopTask, "loopTask", 8192, nullptr, 1,
-                       &gArduinoLoopTaskHandle, ARDUINO_RUNNING_CORE);
 }
 #endif
