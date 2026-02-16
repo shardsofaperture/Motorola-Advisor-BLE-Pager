@@ -5,6 +5,8 @@ import android.bluetooth.BluetoothManager
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import android.widget.Button
 import android.widget.EditText
@@ -15,6 +17,13 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 
 class MainActivity : AppCompatActivity() {
+    private val uiHandler = Handler(Looper.getMainLooper())
+    private val logRefreshRunnable = object : Runnable {
+        override fun run() {
+            renderState()
+            uiHandler.postDelayed(this, 1000L)
+        }
+    }
 
     private val requestBluetoothPermissions = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -71,6 +80,13 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         updateStatusText()
+        uiHandler.removeCallbacks(logRefreshRunnable)
+        uiHandler.post(logRefreshRunnable)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        uiHandler.removeCallbacks(logRefreshRunnable)
     }
 
     private fun renderConfig() {

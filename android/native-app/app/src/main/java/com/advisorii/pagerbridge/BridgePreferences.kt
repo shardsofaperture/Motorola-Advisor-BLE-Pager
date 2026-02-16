@@ -12,7 +12,15 @@ object BridgePreferences {
     private const val KEY_PASS_COUNT = "pass_count"
     private const val KEY_LOGS = "logs"
 
+    private const val LOG_RETENTION_MS = 10_000L
     private const val MAX_LOG_ENTRIES = 80
+    private val logLock = Any()
+    private val transientLogs = mutableListOf<LogEntry>()
+
+    private data class LogEntry(
+        val tsMs: Long,
+        val line: String
+    )
 
     data class PagerConfig(
         val deviceName: String,
@@ -56,24 +64,44 @@ object BridgePreferences {
     }
 
     fun appendLog(context: Context, line: String) {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val current = prefs.getString(KEY_LOGS, "").orEmpty()
-        val list = (if (current.isBlank()) emptyList() else current.split("\n")) + line
-        val trimmed = list.takeLast(MAX_LOG_ENTRIES)
-        prefs.edit().putString(KEY_LOGS, trimmed.joinToString("\n")).apply()
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .remove(KEY_LOGS)
+            .apply()
+        val now = System.currentTimeMillis()
+        synchronized(logLock) {
+            pruneExpiredLogsLocked(now)
+            transientLogs += LogEntry(now, line)
+            while (transientLogs.size > MAX_LOG_ENTRIES) {
+                transientLogs.removeAt(0)
+            }
+        }
     }
 
     fun getLogs(context: Context): String {
-        return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .getString(KEY_LOGS, "")
-            .orEmpty()
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .remove(KEY_LOGS)
+            .apply()
+        val now = System.currentTimeMillis()
+        return synchronized(logLock) {
+            pruneExpiredLogsLocked(now)
+            transientLogs.joinToString("\n") { it.line }
+        }
     }
 
     fun clearLogs(context: Context) {
+        synchronized(logLock) {
+            transientLogs.clear()
+        }
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
-            .putString(KEY_LOGS, "")
+            .remove(KEY_LOGS)
             .putInt(KEY_PASS_COUNT, 0)
             .apply()
+    }
+
+    private fun pruneExpiredLogsLocked(nowMs: Long) {
+        transientLogs.removeAll { nowMs - it.tsMs > LOG_RETENTION_MS }
     }
 }

@@ -1,6 +1,9 @@
 #include <cctype>
+#include <cerrno>
+#include <cstdio>
 #include <cstdint>
 #include <cstring>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -19,7 +22,10 @@ extern "C" {
 #include "driver/usb_serial_jtag.h"
 #include "esp_err.h"
 #include "esp_log.h"
+#include "esp_bt.h"
 #include "esp_pm.h"
+#include "esp_private/esp_clk.h"
+#include "esp_timer.h"
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -38,12 +44,21 @@ constexpr uint32_t kUserLedBootOnMs = 10000;
 constexpr uint32_t kUserLedHeartbeatPeriodMs = 15000;
 constexpr uint32_t kUserLedHeartbeatPulseMs = 150;
 constexpr uint32_t kPmArmDelayMs = 10000;   // stay fully awake for initial debug window
+constexpr int kPmMaxFreqMhz = 80;
+constexpr int kPmMinFreqMhz = 40;
+constexpr bool kPmLightSleepEnable = false;
+constexpr esp_power_level_t kBleTxPowerDefault = ESP_PWR_LVL_N0;  // 0 dBm
+constexpr uint32_t kMetricsLogPeriodMs = 60000;
+constexpr uint32_t kCpuSamplePeriodMs = 1000;
 constexpr uint32_t kSyncWord = 0x7CD215D8;
 constexpr uint32_t kIdleWord = 0x7A89C197;
 constexpr uint32_t kMaxRmtDuration = 32767;
 constexpr size_t kMaxRmtItems = 2000;
-constexpr uint16_t kAdvIntervalMin = 0x0140;  // 200 ms
-constexpr uint16_t kAdvIntervalMax = 0x0280;  // 400 ms
+constexpr uint16_t kAdvFastIntervalMin = 0x0140;  // 200 ms
+constexpr uint16_t kAdvFastIntervalMax = 0x01E0;  // 300 ms
+constexpr int32_t kAdvFastDurationMs = 15000;
+constexpr uint16_t kAdvSlowIntervalMin = 0x0C80;  // 2.0 s
+constexpr uint16_t kAdvSlowIntervalMax = 0x12C0;  // 3.0 s
 
 const ble_uuid128_t kServiceUuid = BLE_UUID128_INIT(
     0x7f, 0x2b, 0x6b, 0x48, 0x2d, 0x7e, 0x4c, 0x35, 0x9e, 0x5a, 0x33, 0xe8, 0xb4, 0xe9, 0x0e, 0x1b);
@@ -53,6 +68,41 @@ const ble_uuid128_t kStatusUuid = BLE_UUID128_INIT(
     0x7f, 0x2b, 0x6b, 0x4a, 0x2d, 0x7e, 0x4c, 0x35, 0x9e, 0x5a, 0x33, 0xe8, 0xb4, 0xe9, 0x0e, 0x1b);
 
 enum class InputSource : uint8_t { kSerial = 0, kBle = 1 };
+enum class AdvProfile : uint8_t { kFastReconnect = 0, kSlowIdle = 1 };
+
+struct AdvProfileConfig {
+  uint16_t intervalMin;
+  uint16_t intervalMax;
+  int32_t durationMs;
+  const char* label;
+};
+
+struct RuntimeMetrics {
+  uint64_t bootUs = 0;
+  uint64_t connStateSinceUs = 0;
+  uint64_t advStateSinceUs = 0;
+  uint64_t connectedUs = 0;
+  uint64_t disconnectedUs = 0;
+  uint64_t advertisingUs = 0;
+  bool connected = false;
+  bool advertising = false;
+};
+
+struct CpuMetrics {
+  uint64_t samples = 0;
+  uint64_t mhz40 = 0;
+  uint64_t mhz80 = 0;
+  uint64_t mhz160 = 0;
+  uint64_t mhz240 = 0;
+  uint64_t mhzOther = 0;
+};
+
+static AdvProfileConfig get_adv_profile_config(AdvProfile profile) {
+  if (profile == AdvProfile::kSlowIdle) {
+    return {kAdvSlowIntervalMin, kAdvSlowIntervalMax, BLE_HS_FOREVER, "slow-idle"};
+  }
+  return {kAdvFastIntervalMin, kAdvFastIntervalMax, kAdvFastDurationMs, "fast-reconnect"};
+}
 }
 
 enum class OutputMode : uint8_t { kOpenDrain = 0, kPushPull = 1 };
@@ -79,14 +129,111 @@ static QueueHandle_t gTxQueue = nullptr;
 static uint8_t gBleAddrType = 0;
 static uint16_t gBleConnHandle = BLE_HS_CONN_HANDLE_NONE;
 static bool gBleAdvertising = false;
+static AdvProfile gAdvProfile = AdvProfile::kFastReconnect;
+static esp_power_level_t gBleTxPowerTarget = kBleTxPowerDefault;
 static bool gPmConfigured = false;
+static bool gPmConfigureAttempted = false;
+static esp_err_t gPmConfigureErr = ESP_OK;
 static bool gBleAddrValid = false;
 static uint8_t gBleAddr[6] = {};
+static RuntimeMetrics gMetrics;
+static CpuMetrics gCpuMetrics;
+static portMUX_TYPE gMetricsMux = portMUX_INITIALIZER_UNLOCKED;
 
 static void process_input_payload(const std::string& payload, InputSource source);
 static int ble_gap_event(struct ble_gap_event* event, void* arg);
-static void start_ble_advertising();
+static void start_ble_advertising(AdvProfile profile);
 static void log_ble_status();
+static void log_runtime_metrics(const char* reason);
+static void log_pm_locks();
+static void configure_ble_tx_power();
+static bool parse_ble_tx_power_dbm(const std::string& token, esp_power_level_t* outLevel);
+static void log_ble_tx_power_status();
+
+static int ble_tx_power_dbm(esp_power_level_t level) {
+  switch (level) {
+    case ESP_PWR_LVL_N24: return -24;
+    case ESP_PWR_LVL_N21: return -21;
+    case ESP_PWR_LVL_N18: return -18;
+    case ESP_PWR_LVL_N15: return -15;
+    case ESP_PWR_LVL_N12: return -12;
+    case ESP_PWR_LVL_N9: return -9;
+    case ESP_PWR_LVL_N6: return -6;
+    case ESP_PWR_LVL_N3: return -3;
+    case ESP_PWR_LVL_N0: return 0;
+    case ESP_PWR_LVL_P3: return 3;
+    case ESP_PWR_LVL_P6: return 6;
+    case ESP_PWR_LVL_P9: return 9;
+    case ESP_PWR_LVL_P12: return 12;
+    case ESP_PWR_LVL_P15: return 15;
+    case ESP_PWR_LVL_P18: return 18;
+    case ESP_PWR_LVL_P20: return 20;
+    default: return 999;
+  }
+}
+
+static bool parse_ble_tx_power_dbm(const std::string& token, esp_power_level_t* outLevel) {
+  if (outLevel == nullptr) {
+    return false;
+  }
+  if (token.empty()) {
+    return false;
+  }
+  char* end = nullptr;
+  errno = 0;
+  const long parsed = std::strtol(token.c_str(), &end, 10);
+  if (errno != 0 || end == token.c_str() || *end != '\0') {
+    return false;
+  }
+  if (parsed < -24 || parsed > 20) {
+    return false;
+  }
+  const int dbm = static_cast<int>(parsed);
+  switch (dbm) {
+    case -24: *outLevel = ESP_PWR_LVL_N24; return true;
+    case -21: *outLevel = ESP_PWR_LVL_N21; return true;
+    case -18: *outLevel = ESP_PWR_LVL_N18; return true;
+    case -15: *outLevel = ESP_PWR_LVL_N15; return true;
+    case -12: *outLevel = ESP_PWR_LVL_N12; return true;
+    case -9: *outLevel = ESP_PWR_LVL_N9; return true;
+    case -6: *outLevel = ESP_PWR_LVL_N6; return true;
+    case -3: *outLevel = ESP_PWR_LVL_N3; return true;
+    case 0: *outLevel = ESP_PWR_LVL_N0; return true;
+    case 3: *outLevel = ESP_PWR_LVL_P3; return true;
+    case 6: *outLevel = ESP_PWR_LVL_P6; return true;
+    case 9: *outLevel = ESP_PWR_LVL_P9; return true;
+    case 12: *outLevel = ESP_PWR_LVL_P12; return true;
+    case 15: *outLevel = ESP_PWR_LVL_P15; return true;
+    case 18: *outLevel = ESP_PWR_LVL_P18; return true;
+    case 20: *outLevel = ESP_PWR_LVL_P20; return true;
+    default: return false;
+  }
+}
+
+static void log_ble_tx_power_status() {
+  const esp_power_level_t advLevel = esp_ble_tx_power_get(ESP_BLE_PWR_TYPE_ADV);
+  const esp_power_level_t defaultLevel = esp_ble_tx_power_get(ESP_BLE_PWR_TYPE_DEFAULT);
+  ESP_LOGI(kTag, "txpower: target=%ddBm adv=%ddBm default=%ddBm",
+           ble_tx_power_dbm(gBleTxPowerTarget), ble_tx_power_dbm(advLevel), ble_tx_power_dbm(defaultLevel));
+}
+
+static void cpu_metrics_sample() {
+  const int mhz = esp_clk_cpu_freq() / 1000000;
+  portENTER_CRITICAL(&gMetricsMux);
+  gCpuMetrics.samples++;
+  if (mhz <= 40) {
+    gCpuMetrics.mhz40++;
+  } else if (mhz <= 80) {
+    gCpuMetrics.mhz80++;
+  } else if (mhz <= 160) {
+    gCpuMetrics.mhz160++;
+  } else if (mhz <= 240) {
+    gCpuMetrics.mhz240++;
+  } else {
+    gCpuMetrics.mhzOther++;
+  }
+  portEXIT_CRITICAL(&gMetricsMux);
+}
 
 static void set_user_led(bool on) {
   const int onLevel = kUserLedActiveHigh ? 1 : 0;
@@ -428,6 +575,7 @@ static void log_status() {
   ESP_LOGI(kTag, "status: ble connected=%s advertising=%s",
            gBleConnHandle == BLE_HS_CONN_HANDLE_NONE ? "no" : "yes",
            gBleAdvertising ? "yes" : "no");
+  ESP_LOGI(kTag, "status: ble tx_power target=%ddBm", ble_tx_power_dbm(gBleTxPowerTarget));
   if (gBleAddrValid) {
     ESP_LOGI(kTag, "status: ble mac=%02x:%02x:%02x:%02x:%02x:%02x",
              gBleAddr[5], gBleAddr[4], gBleAddr[3], gBleAddr[2], gBleAddr[1], gBleAddr[0]);
@@ -436,17 +584,21 @@ static void log_status() {
 
 static void configure_power_management() {
 #if CONFIG_PM_ENABLE
+  gPmConfigureAttempted = true;
   esp_pm_config_t pm = {};
-  pm.max_freq_mhz = 160;
-  pm.min_freq_mhz = 40;
+  pm.max_freq_mhz = kPmMaxFreqMhz;
+  pm.min_freq_mhz = kPmMinFreqMhz;
   // Light sleep currently causes NimBLE host to become disabled on this target build.
   // Keep DFS enabled for savings while preserving BLE availability.
-  pm.light_sleep_enable = false;
+  pm.light_sleep_enable = kPmLightSleepEnable;
   const esp_err_t err = esp_pm_configure(&pm);
+  gPmConfigureErr = err;
   if (err == ESP_OK) {
     gPmConfigured = true;
-    ESP_LOGI(kTag, "Power management configured (40-160MHz, light sleep off)");
+    ESP_LOGI(kTag, "Power management configured (%d-%dMHz, light sleep %s)",
+             kPmMinFreqMhz, kPmMaxFreqMhz, kPmLightSleepEnable ? "on" : "off");
   } else {
+    gPmConfigured = false;
     ESP_LOGE(kTag, "esp_pm_configure failed: 0x%x", err);
   }
 #else
@@ -454,11 +606,34 @@ static void configure_power_management() {
 #endif
 }
 
-static void log_pm_status() {
+static void log_pm_locks() {
 #if CONFIG_PM_ENABLE
   if (!gPmConfigured) {
+    ESP_LOGI(kTag, "pm locks: pending (PM arms %lus after boot)",
+             static_cast<unsigned long>(kPmArmDelayMs / 1000));
+    return;
+  }
+  ESP_LOGI(kTag, "pm locks: dumping active locks");
+  std::fflush(stdout);
+  const esp_err_t err = esp_pm_dump_locks(stdout);
+  std::fflush(stdout);
+  if (err != ESP_OK) {
+    ESP_LOGW(kTag, "pm locks: dump failed (err=0x%x)", err);
+  }
+#else
+  ESP_LOGI(kTag, "pm locks: PM disabled in sdkconfig");
+#endif
+}
+
+static void log_pm_status() {
+#if CONFIG_PM_ENABLE
+  if (!gPmConfigureAttempted) {
     ESP_LOGI(kTag, "pm: pending (arms %lus after boot)",
              static_cast<unsigned long>(kPmArmDelayMs / 1000));
+    return;
+  }
+  if (!gPmConfigured) {
+    ESP_LOGW(kTag, "pm: configure failed err=0x%x", gPmConfigureErr);
     return;
   }
   esp_pm_config_t pm = {};
@@ -474,18 +649,139 @@ static void log_pm_status() {
 #endif
 }
 
+static void metrics_set_connected(bool connected) {
+  const uint64_t now = static_cast<uint64_t>(esp_timer_get_time());
+  portENTER_CRITICAL(&gMetricsMux);
+  if (gMetrics.connected != connected) {
+    if (gMetrics.connected) {
+      gMetrics.connectedUs += now - gMetrics.connStateSinceUs;
+    } else {
+      gMetrics.disconnectedUs += now - gMetrics.connStateSinceUs;
+    }
+    gMetrics.connected = connected;
+    gMetrics.connStateSinceUs = now;
+  }
+  portEXIT_CRITICAL(&gMetricsMux);
+}
+
+static void metrics_set_advertising(bool advertising) {
+  const uint64_t now = static_cast<uint64_t>(esp_timer_get_time());
+  bool connectedWhileAdvertising = false;
+  portENTER_CRITICAL(&gMetricsMux);
+  connectedWhileAdvertising = advertising && gMetrics.connected;
+  if (gMetrics.advertising != advertising) {
+    if (gMetrics.advertising) {
+      gMetrics.advertisingUs += now - gMetrics.advStateSinceUs;
+    }
+    gMetrics.advertising = advertising;
+    gMetrics.advStateSinceUs = now;
+  }
+  portEXIT_CRITICAL(&gMetricsMux);
+  if (connectedWhileAdvertising) {
+    ESP_LOGW(kTag, "metrics: invariant breach attempt (advertising while connected)");
+  }
+}
+
+static void log_runtime_metrics(const char* reason) {
+  const uint64_t now = static_cast<uint64_t>(esp_timer_get_time());
+  uint64_t uptimeUs = 0;
+  uint64_t connectedUs = 0;
+  uint64_t disconnectedUs = 0;
+  uint64_t advertisingUs = 0;
+  CpuMetrics cpu = {};
+  portENTER_CRITICAL(&gMetricsMux);
+  uptimeUs = now - gMetrics.bootUs;
+  connectedUs = gMetrics.connectedUs + (gMetrics.connected ? (now - gMetrics.connStateSinceUs) : 0);
+  disconnectedUs = gMetrics.disconnectedUs + (gMetrics.connected ? 0 : (now - gMetrics.connStateSinceUs));
+  advertisingUs = gMetrics.advertisingUs + (gMetrics.advertising ? (now - gMetrics.advStateSinceUs) : 0);
+  cpu = gCpuMetrics;
+  portEXIT_CRITICAL(&gMetricsMux);
+
+  const float connectedPct = uptimeUs == 0 ? 0.0f : (100.0f * static_cast<float>(connectedUs) / static_cast<float>(uptimeUs));
+  const float disconnectedPct =
+      uptimeUs == 0 ? 0.0f : (100.0f * static_cast<float>(disconnectedUs) / static_cast<float>(uptimeUs));
+  const float advertisingPct =
+      uptimeUs == 0 ? 0.0f : (100.0f * static_cast<float>(advertisingUs) / static_cast<float>(uptimeUs));
+
+  ESP_LOGI(kTag, "metrics[%s]: up=%llus conn=%llus(%.1f%%) disc=%llus(%.1f%%) adv=%llus(%.1f%%)",
+           reason,
+           static_cast<unsigned long long>(uptimeUs / 1000000ULL),
+           static_cast<unsigned long long>(connectedUs / 1000000ULL), connectedPct,
+           static_cast<unsigned long long>(disconnectedUs / 1000000ULL), disconnectedPct,
+           static_cast<unsigned long long>(advertisingUs / 1000000ULL), advertisingPct);
+
+  const int currentMhz = esp_clk_cpu_freq() / 1000000;
+  const float pct40 = cpu.samples == 0 ? 0.0f : (100.0f * static_cast<float>(cpu.mhz40) / static_cast<float>(cpu.samples));
+  const float pct80 = cpu.samples == 0 ? 0.0f : (100.0f * static_cast<float>(cpu.mhz80) / static_cast<float>(cpu.samples));
+  const float pct160 =
+      cpu.samples == 0 ? 0.0f : (100.0f * static_cast<float>(cpu.mhz160) / static_cast<float>(cpu.samples));
+  const float pct240 =
+      cpu.samples == 0 ? 0.0f : (100.0f * static_cast<float>(cpu.mhz240) / static_cast<float>(cpu.samples));
+  const float pctOther =
+      cpu.samples == 0 ? 0.0f : (100.0f * static_cast<float>(cpu.mhzOther) / static_cast<float>(cpu.samples));
+  ESP_LOGI(kTag, "metrics[%s]: cpu_freq now=%dMHz samples=%llu [40:%.1f%% 80:%.1f%% 160:%.1f%% 240:%.1f%% other:%.1f%%]",
+           reason, currentMhz, static_cast<unsigned long long>(cpu.samples), pct40, pct80, pct160, pct240, pctOther);
+
+#if CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS && CONFIG_FREERTOS_USE_TRACE_FACILITY
+  const UBaseType_t taskCount = uxTaskGetNumberOfTasks();
+  std::vector<TaskStatus_t> taskStats(taskCount + 4);
+  uint32_t totalRuntime = 0;
+  const UBaseType_t populated = uxTaskGetSystemState(taskStats.data(), taskStats.size(), &totalRuntime);
+  if (populated > 0 && totalRuntime > 0) {
+    uint64_t idleRuntime = 0;
+    for (UBaseType_t i = 0; i < populated; ++i) {
+      if (std::strncmp(taskStats[i].pcTaskName, "IDLE", 4) == 0) {
+        idleRuntime += taskStats[i].ulRunTimeCounter;
+      }
+    }
+    const uint32_t cores = static_cast<uint32_t>(portNUM_PROCESSORS);
+    const float capacity = static_cast<float>(totalRuntime) * static_cast<float>(cores);
+    float idlePct = capacity > 0.0f ? (100.0f * static_cast<float>(idleRuntime) / capacity) : 0.0f;
+    if (idlePct < 0.0f) idlePct = 0.0f;
+    if (idlePct > 100.0f) idlePct = 100.0f;
+    const float busyPct = 100.0f - idlePct;
+    ESP_LOGI(kTag, "metrics[%s]: cpu_load busy=%.1f%% idle=%.1f%% cores=%u (task stats)",
+             reason, busyPct, idlePct, static_cast<unsigned>(cores));
+  } else {
+    ESP_LOGW(kTag, "metrics[%s]: cpu_load unavailable (task snapshot empty)", reason);
+  }
+#else
+  ESP_LOGI(kTag, "metrics[%s]: cpu_load unavailable (enable FREERTOS run-time stats)", reason);
+#endif
+}
+
 static void pm_arm_task(void*) {
   vTaskDelay(pdMS_TO_TICKS(kPmArmDelayMs));
   configure_power_management();
   vTaskDelete(nullptr);
 }
 
+static void metrics_task(void*) {
+  uint32_t elapsedMs = 0;
+  while (true) {
+    vTaskDelay(pdMS_TO_TICKS(kCpuSamplePeriodMs));
+    cpu_metrics_sample();
+    elapsedMs += kCpuSamplePeriodMs;
+    if (elapsedMs >= kMetricsLogPeriodMs) {
+      log_runtime_metrics("periodic");
+      elapsedMs = 0;
+    }
+  }
+}
+
 static void log_ble_status() {
+  const AdvProfileConfig advCfg = get_adv_profile_config(gAdvProfile);
+  const esp_power_level_t advLevel = esp_ble_tx_power_get(ESP_BLE_PWR_TYPE_ADV);
+  const esp_power_level_t defaultLevel = esp_ble_tx_power_get(ESP_BLE_PWR_TYPE_DEFAULT);
   ESP_LOGI(kTag, "ble: name=%s connected=%s advertising=%s interval=%.2f-%.2f s",
            kBleDeviceName,
            gBleConnHandle == BLE_HS_CONN_HANDLE_NONE ? "no" : "yes",
            gBleAdvertising ? "yes" : "no",
-           kAdvIntervalMin * 0.000625f, kAdvIntervalMax * 0.000625f);
+           advCfg.intervalMin * 0.000625f, advCfg.intervalMax * 0.000625f);
+  ESP_LOGI(kTag, "ble: profile=%s duration=%s",
+           advCfg.label, advCfg.durationMs == BLE_HS_FOREVER ? "forever" : "15s");
+  ESP_LOGI(kTag, "ble: tx_power target=%ddBm adv=%ddBm default=%ddBm",
+           ble_tx_power_dbm(gBleTxPowerTarget), ble_tx_power_dbm(advLevel), ble_tx_power_dbm(defaultLevel));
   if (gBleAddrValid) {
     ESP_LOGI(kTag, "ble: mac=%02x:%02x:%02x:%02x:%02x:%02x",
              gBleAddr[5], gBleAddr[4], gBleAddr[3], gBleAddr[2], gBleAddr[1], gBleAddr[0]);
@@ -507,6 +803,32 @@ static bool handle_local_command(const std::string& raw) {
     log_pm_status();
     return true;
   }
+  if (cmd == "pm locks" || cmd == "pm lock") {
+    log_pm_locks();
+    return true;
+  }
+  if (cmd == "metrics") {
+    log_runtime_metrics("manual");
+    return true;
+  }
+  if (cmd == "txpower" || cmd == "tx power") {
+    log_ble_tx_power_status();
+    return true;
+  }
+  if (cmd.rfind("txpower ", 0) == 0 || cmd.rfind("tx power ", 0) == 0) {
+    const std::string rawTrimmed = trim_copy(raw);
+    const size_t prefixLen = cmd.rfind("txpower ", 0) == 0 ? 8U : 9U;
+    const std::string arg = rawTrimmed.size() <= prefixLen ? "" : trim_copy(rawTrimmed.substr(prefixLen));
+    esp_power_level_t level = ESP_PWR_LVL_INVALID;
+    if (arg.empty() || !parse_ble_tx_power_dbm(arg, &level)) {
+      ESP_LOGI(kTag, "Usage: txpower <dbm> where dbm is one of -24,-21,-18,-15,-12,-9,-6,-3,0,3,6,9,12,15,18,20");
+      return true;
+    }
+    gBleTxPowerTarget = level;
+    configure_ble_tx_power();
+    log_ble_tx_power_status();
+    return true;
+  }
   if (cmd == "ble" || cmd == "ble status") {
     log_ble_status();
     return true;
@@ -521,11 +843,11 @@ static bool handle_local_command(const std::string& raw) {
       ESP_LOGW(kTag, "ble_gap_adv_stop rc=%d", stopRc);
     }
     gBleAdvertising = false;
-    start_ble_advertising();
+    start_ble_advertising(AdvProfile::kFastReconnect);
     return true;
   }
   if (cmd == "help" || cmd == "?") {
-    ESP_LOGI(kTag, "Commands: status | pm | ble [status|restart] | ping | reboot | send <message> | help");
+    ESP_LOGI(kTag, "Commands: status | pm | pm locks | metrics | txpower [<dbm>] | ble [status|restart] | ping | reboot | send <message> | help");
     return true;
   }
   if (cmd == "ping") {
@@ -570,7 +892,7 @@ static void process_input_line(const std::string& rawLine, InputSource source) {
   if (source == InputSource::kBle) {
     ESP_LOGW(kTag, "BLE unknown command: %s", trimmed.c_str());
   } else {
-    ESP_LOGI(kTag, "Unknown command. Use: send <message>, status, pm, ble, ping, reboot, help");
+    ESP_LOGI(kTag, "Unknown command. Use: send <message>, status, pm, pm locks, metrics, txpower, ble, ping, reboot, help");
   }
 }
 
@@ -679,9 +1001,29 @@ static void ble_on_sync() {
     ESP_LOGI(kTag, "BLE address %02x:%02x:%02x:%02x:%02x:%02x",
              addr[5], addr[4], addr[3], addr[2], addr[1], addr[0]);
   }
+  configure_ble_tx_power();
   ESP_LOGI(kTag, "BLE service=%s rx=%s status=%s",
            kServiceUuidStr, kRxUuidStr, kStatusUuidStr);
-  start_ble_advertising();
+  start_ble_advertising(AdvProfile::kFastReconnect);
+}
+
+static void configure_ble_tx_power() {
+  const esp_err_t defErr = esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_DEFAULT, gBleTxPowerTarget);
+  if (defErr != ESP_OK) {
+    ESP_LOGW(kTag, "BLE tx power set default failed: 0x%x", defErr);
+  }
+  const esp_err_t advErr = esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_ADV, gBleTxPowerTarget);
+  if (advErr != ESP_OK) {
+    ESP_LOGW(kTag, "BLE tx power set adv failed: 0x%x", advErr);
+  }
+  const esp_err_t scanErr = esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_SCAN, gBleTxPowerTarget);
+  if (scanErr != ESP_OK) {
+    ESP_LOGW(kTag, "BLE tx power set scan failed: 0x%x", scanErr);
+  }
+  const int advDbm = ble_tx_power_dbm(esp_ble_tx_power_get(ESP_BLE_PWR_TYPE_ADV));
+  const int defaultDbm = ble_tx_power_dbm(esp_ble_tx_power_get(ESP_BLE_PWR_TYPE_DEFAULT));
+  ESP_LOGI(kTag, "BLE tx power configured target=%ddBm adv=%ddBm default=%ddBm",
+           ble_tx_power_dbm(gBleTxPowerTarget), advDbm, defaultDbm);
 }
 
 static int ble_gap_event(struct ble_gap_event* event, void*) {
@@ -690,28 +1032,50 @@ static int ble_gap_event(struct ble_gap_event* event, void*) {
       if (event->connect.status == 0) {
         gBleConnHandle = event->connect.conn_handle;
         gBleAdvertising = false;
+        metrics_set_connected(true);
+        metrics_set_advertising(false);
         ESP_LOGI(kTag, "BLE connected; handle=%u", static_cast<unsigned>(gBleConnHandle));
       } else {
         gBleConnHandle = BLE_HS_CONN_HANDLE_NONE;
+        metrics_set_connected(false);
         ESP_LOGW(kTag, "BLE connect failed; status=%d", event->connect.status);
-        start_ble_advertising();
+        start_ble_advertising(AdvProfile::kFastReconnect);
       }
       return 0;
     case BLE_GAP_EVENT_DISCONNECT:
       ESP_LOGI(kTag, "BLE disconnected; reason=%d", event->disconnect.reason);
       gBleConnHandle = BLE_HS_CONN_HANDLE_NONE;
-      start_ble_advertising();
+      metrics_set_connected(false);
+      start_ble_advertising(AdvProfile::kFastReconnect);
       return 0;
     case BLE_GAP_EVENT_ADV_COMPLETE:
       gBleAdvertising = false;
-      start_ble_advertising();
+      metrics_set_advertising(false);
+      if (gBleConnHandle != BLE_HS_CONN_HANDLE_NONE) {
+        return 0;
+      }
+      if (gAdvProfile == AdvProfile::kFastReconnect &&
+          event->adv_complete.reason == BLE_HS_ETIMEOUT) {
+        ESP_LOGI(kTag, "BLE fast reconnect window expired; switching to slow advertising");
+        start_ble_advertising(AdvProfile::kSlowIdle);
+      } else {
+        start_ble_advertising(gAdvProfile);
+      }
       return 0;
     default:
       return 0;
   }
 }
 
-static void start_ble_advertising() {
+static void start_ble_advertising(AdvProfile profile) {
+  if (gBleConnHandle != BLE_HS_CONN_HANDLE_NONE) {
+    ESP_LOGW(kTag, "start_ble_advertising ignored while connected");
+    gBleAdvertising = false;
+    metrics_set_advertising(false);
+    return;
+  }
+
+  const AdvProfileConfig cfg = get_adv_profile_config(profile);
   ble_hs_adv_fields advFields = {};
   advFields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
   advFields.uuids128 = const_cast<ble_uuid128_t*>(&kServiceUuid);
@@ -740,19 +1104,23 @@ static void start_ble_advertising() {
   ble_gap_adv_params params = {};
   params.conn_mode = BLE_GAP_CONN_MODE_UND;
   params.disc_mode = BLE_GAP_DISC_MODE_GEN;
-  params.itvl_min = kAdvIntervalMin;
-  params.itvl_max = kAdvIntervalMax;
+  params.itvl_min = cfg.intervalMin;
+  params.itvl_max = cfg.intervalMax;
 
-  rc = ble_gap_adv_start(gBleAddrType, nullptr, BLE_HS_FOREVER, &params, ble_gap_event, nullptr);
+  rc = ble_gap_adv_start(gBleAddrType, nullptr, cfg.durationMs, &params, ble_gap_event, nullptr);
   if (rc != 0) {
     ESP_LOGE(kTag, "ble_gap_adv_start failed: %d", rc);
     gBleAdvertising = false;
+    metrics_set_advertising(false);
     return;
   }
 
+  gAdvProfile = profile;
   gBleAdvertising = true;
-  ESP_LOGI(kTag, "BLE advertising as %s (interval %.2f-%.2f s)",
-           kBleDeviceName, kAdvIntervalMin * 0.000625f, kAdvIntervalMax * 0.000625f);
+  metrics_set_advertising(true);
+  ESP_LOGI(kTag, "BLE advertising (%s) as %s (interval %.2f-%.2f s, duration=%s)",
+           cfg.label, kBleDeviceName, cfg.intervalMin * 0.000625f, cfg.intervalMax * 0.000625f,
+           cfg.durationMs == BLE_HS_FOREVER ? "forever" : "15s");
 }
 
 static void ble_host_task(void*) {
@@ -861,6 +1229,17 @@ extern "C" void app_main(void) {
   ESP_LOGI(kTag, "Starting ESP-IDF pager bridge");
   set_idle_line(gConfig.dataGpio, gConfig.output, gConfig.idleHigh);
   init_user_led();
+  const uint64_t now = static_cast<uint64_t>(esp_timer_get_time());
+  portENTER_CRITICAL(&gMetricsMux);
+  gMetrics = {};
+  gCpuMetrics = {};
+  gMetrics.bootUs = now;
+  gMetrics.connStateSinceUs = now;
+  gMetrics.advStateSinceUs = now;
+  gMetrics.connected = false;
+  gMetrics.advertising = false;
+  portEXIT_CRITICAL(&gMetricsMux);
+  cpu_metrics_sample();
 
   gTxQueue = xQueueCreate(2, sizeof(TxJob*));
   if (gTxQueue == nullptr) {
@@ -871,6 +1250,7 @@ extern "C" void app_main(void) {
   xTaskCreatePinnedToCore(tx_worker_task, "tx_worker", 8192, nullptr, 5, nullptr, 0);
   xTaskCreatePinnedToCore(serial_input_task, "serial_input", 6144, nullptr, 4, nullptr, 0);
   xTaskCreatePinnedToCore(pm_arm_task, "pm_arm", 3072, nullptr, 2, nullptr, 0);
+  xTaskCreatePinnedToCore(metrics_task, "metrics", 3072, nullptr, 1, nullptr, 0);
   xTaskCreatePinnedToCore(user_led_task, "user_led", 2048, nullptr, 1, nullptr, 0);
 
   if (!init_ble()) {

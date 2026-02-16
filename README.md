@@ -1,115 +1,146 @@
-# Advisor II BLE Receiver
+# Advisor BLE Receiver (Motorola Advisor / Linguist)
 
-Repository for two deliverables:
+This project bridges Android notifications to an original Motorola Advisor pager through a XIAO ESP32S3.
 
-1. **ESP32 firmware (with power management)** for the XIAO ESP32S3 pager bridge.
-2. **Android app** that forwards Google Messages notifications over BLE.
+It includes:
+1. ESP32 firmware (`ESP-IDF` in PlatformIO) that receives BLE writes and transmits POCSAG data to the pager.
+2. Android app (`android/native-app`) that listens to Google Messages notifications and forwards payloads over BLE.
+
+Note: The repository name still says "Advisor II" in places today, but this branch targets the original Motorola Advisor (Linguist use case), not Advisor II.
+
+## Architecture
+
+1. Android receives an SMS notification from Google Messages.
+2. Android app formats `SEND <sender>: <message>\n` and writes it to BLE RX characteristic.
+3. ESP32 parses command, builds POCSAG words, and drives pager data line via GPIO.
+4. ESP32 keeps BLE available with low-power advertising profile and PM settings.
 
 ## Repository layout
 
-- `src/` → **active ESP32 firmware source** (PlatformIO + Arduino + ESP-IDF)
-- `platformio.ini` / `sdkconfig.defaults` / `huge_app.csv` → firmware build configuration
-- `android/native-app/` → **Android app source** (Gradle Kotlin project)
-- `src_arduino/` → legacy placeholder (not used for builds)
+- `src/main.cpp`: active firmware source
+- `platformio.ini`: PlatformIO build/upload/monitor config
+- `sdkconfig.defaults`, `sdkconfig.xiao_esp32s3_espidf`: ESP-IDF options
+- `huge_app.csv`: partition table
+- `android/native-app/`: Android application
 
-> Only the power-management firmware in `src/` is supported and maintained.
+## Hardware
 
----
+- Board: Seeed XIAO ESP32S3
+- Pager data pin: GPIO4 (XIAO D3 in this project)
+- Typical wiring:
+1. ESP32 GND -> pager GND (common ground required)
+2. GPIO4 -> series resistor (e.g. ~480 ohm) -> pager data input
 
-## ESP32 firmware (VS Code on macOS)
+## BLE profile
 
-### Prerequisites
-- macOS with **VS Code**
-- VS Code extension: **PlatformIO IDE**
-- USB data cable for XIAO ESP32S3
-
-### Build and flash
-1. Open this repository root in VS Code.
-2. Confirm `platformio.ini` default environment is `xiao_esp32s3_idfpm`.
-3. Connect the board over USB.
-4. In VS Code terminal:
-   ```zsh
-   pio run
-   ```
-5. Upload firmware:
-   ```zsh
-   pio run -t upload
-   ```
-6. Open serial monitor:
-   ```zsh
-   pio device monitor -b 115200
-   ```
-
-### Quick firmware validation
-Use serial commands:
-- `STATUS`
-- `PING`
-- `SEND_MIN 1422890 0`
-
-### BLE GATT constants
 - Device name: `PagerBridge`
 - Service UUID: `1b0ee9b4-e833-5a9e-354c-7e2d486b2b7f`
-- RX (write) characteristic UUID: `1b0ee9b4-e833-5a9e-354c-7e2d496b2b7f`
-- Status (read/notify) characteristic UUID: `1b0ee9b4-e833-5a9e-354c-7e2d4a6b2b7f`
+- RX characteristic (write): `1b0ee9b4-e833-5a9e-354c-7e2d496b2b7f`
+- Status characteristic (read/notify): `1b0ee9b4-e833-5a9e-354c-7e2d4a6b2b7f`
 
-### Wiring
-- ESP32 GND → pager ground
-- XIAO ESP32S3 D3 (GPIO4) → 480 Ω resistor → pager header pin 4
-- Ensure common ground between devices
+## Firmware behavior
 
----
+- Default POCSAG config:
+1. capcode `1422890`
+2. function bits `2`
+3. baud `512`
+4. preamble bits `576`
+- LED behavior:
+1. on for first 10 seconds at boot
+2. short heartbeat blink every 15 seconds
+- Power behavior:
+1. PM arms 10 seconds after boot
+2. DFS configured to 40-80 MHz (`light_sleep` disabled)
+3. Fast reconnect advertising window (200-300 ms for 15s), then slow idle advertising (2.0-3.0s)
+- Runtime BLE TX power is adjustable with command (`txpower <dbm>`)
 
-## Android app (VS Code on macOS)
+## Serial/BLE command interface
 
-The Android source is in `android/native-app/`.
+Commands accepted on serial monitor and BLE RX:
 
-### Prerequisites
-- VS Code
-- Android Studio (recommended, provides JDK)
-- Android SDK + platform tools installed
-- Android device with Developer Options + USB debugging enabled
+- `send <message>`: enqueue pager message
+- `status`: POCSAG + GPIO + BLE state summary
+- `pm`: PM configuration state
+- `pm locks`: active PM lock dump (debug power blockers)
+- `metrics`: uptime/connected/advertising/cpu frequency/load metrics
+- `txpower`: show current target + active BLE TX levels
+- `txpower <dbm>`: set TX power; allowed `-24,-21,-18,-15,-12,-9,-6,-3,0,3,6,9,12,15,18,20`
+- `ble`: BLE status (interval/profile/MAC/UUIDs/tx power)
+- `ble restart`: restart advertising if disconnected
+- `ping`: response check
+- `reboot`: soft reboot
+- `help`: command summary
 
-### Build from VS Code terminal
-From repo root:
+## Build and flash firmware (PlatformIO)
+
+Environment is `xiao_esp32s3_espidf`.
+
+1. Build:
+```zsh
+pio run --environment xiao_esp32s3_espidf
+```
+
+2. Flash:
+```zsh
+pio run --environment xiao_esp32s3_espidf --target upload
+```
+
+3. Serial monitor:
+```zsh
+pio device monitor -p /dev/cu.usbmodem14401 -b 115200 --echo --eol LF
+```
+
+## Android app
+
+Source: `android/native-app`
+
+What it does:
+1. Notification listener watches `com.google.android.apps.messaging`
+2. Extracts sender + body from notification extras
+3. Writes BLE payload to pager bridge
+4. Shows pass count in UI
+5. Keeps only short-lived logs (auto-expire after ~10 seconds, non-persistent)
+6. Foreground notification tap re-opens the app
+
+### Build APK
 
 ```zsh
 cd android/native-app
 ./gradlew assembleDebug
 ```
 
-Notes:
-- This repo includes a local `android/native-app/gradlew` bootstrap script.
-- It auto-detects Android Studio JDK and `~/Library/Android/sdk` on macOS.
-
-APK output:
+Output:
 - `android/native-app/app/build/outputs/apk/debug/app-debug.apk`
 
-### Install to a connected phone
+### Install
+
 ```zsh
 cd android/native-app
 ./gradlew installDebug
 ```
 
-### First-run phone setup
-1. Open the installed app.
-2. Grant Bluetooth permissions.
-3. Grant notification runtime permission (Android 13+).
-4. Enable notification access for the app.
-5. Save BLE configuration (device name / UUIDs) if different from defaults.
+### First run setup
 
----
+1. Grant Bluetooth permissions
+2. Grant notification permission (Android 13+)
+3. Enable notification listener access for this app
+4. Select bonded BLE device or set address/name manually
+5. Verify UUIDs match firmware defaults
 
-## Operational flow
+## Test checklist
 
-1. Power and flash the ESP32 firmware.
-2. Confirm BLE advertising as `PagerBridge`.
-3. Install and configure Android app permissions.
-4. Send a test SMS / Google Messages notification.
-5. Verify firmware receives and transmits page payload.
+1. Flash firmware and open monitor
+2. Run `status`, `pm`, `ble`, `metrics`
+3. From phone app, send test notification from Google Messages
+4. Confirm monitor shows `Queued:` and `TX_DONE`
+5. Confirm pager alerts with expected message
 
-If needed, use nRF Connect to manually test BLE writes with:
+## Known constraints
 
-```text
-PING\n
-SEND 123456 0 test message\n
-```
+- `light_sleep` is intentionally off because BLE stability is prioritized on this target build.
+- While USB serial monitor is attached, PM lock state differs from battery-only operation.
+- Android side currently treats "write started" as queued, not guaranteed end-to-end delivery ACK.
+
+## Planned repo cleanup
+
+- Rename project/repository from "Advisor II" naming to "Advisor" naming to match actual target hardware.
