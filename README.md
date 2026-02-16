@@ -6,7 +6,7 @@ It includes:
 1. ESP32 firmware (`ESP-IDF` in PlatformIO) that receives BLE writes and transmits POCSAG data to the pager.
 2. Android app (`android/native-app`) that listens to Google Messages notifications and forwards payloads over BLE.
 
-Note: The repository name still says "Advisor II" in places today, but this branch targets the original Motorola Advisor (Linguist use case), not Advisor II.
+This repository now targets the original Motorola Advisor (Linguist use case).
 
 ## Architecture
 
@@ -141,6 +141,6 @@ cd android/native-app
 - While USB serial monitor is attached, PM lock state differs from battery-only operation.
 - Android side currently treats "write started" as queued, not guaranteed end-to-end delivery ACK.
 
-## Planned repo cleanup
+## Future work
 
-- Rename project/repository from "Advisor II" naming to "Advisor" naming to match actual target hardware.
+- Add a parallel variant of this project for the Motorola Advisor II.
