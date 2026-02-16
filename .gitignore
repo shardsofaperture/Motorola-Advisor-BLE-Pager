@@ -10,3 +10,4 @@ android/native-app/.gradle-user-home/
 android/native-app/build/
 android/native-app/app/build/
 android/native-app/local.properties
+.DS_Store
