@@ -9,6 +9,7 @@ object BridgePreferences {
     private const val KEY_SERVICE_UUID = "service_uuid"
     private const val KEY_RX_UUID = "rx_uuid"
     private const val KEY_ONGOING_NOTIFICATION = "ongoing_notification"
+    private const val KEY_FORWARDING_ENABLED = "forwarding_enabled"
     private const val KEY_PASS_COUNT = "pass_count"
     private const val KEY_LOGS = "logs"
 
@@ -27,7 +28,8 @@ object BridgePreferences {
         val deviceAddress: String,
         val serviceUuid: String,
         val rxUuid: String,
-        val ongoingNotification: Boolean
+        val ongoingNotification: Boolean,
+        val forwardingEnabled: Boolean
     )
 
     fun loadConfig(context: Context): PagerConfig {
@@ -37,7 +39,8 @@ object BridgePreferences {
             deviceAddress = prefs.getString(KEY_DEVICE_ADDRESS, "").orEmpty(),
             serviceUuid = prefs.getString(KEY_SERVICE_UUID, "1b0ee9b4-e833-5a9e-354c-7e2d486b2b7f").orEmpty(),
             rxUuid = prefs.getString(KEY_RX_UUID, "1b0ee9b4-e833-5a9e-354c-7e2d496b2b7f").orEmpty(),
-            ongoingNotification = prefs.getBoolean(KEY_ONGOING_NOTIFICATION, true)
+            ongoingNotification = prefs.getBoolean(KEY_ONGOING_NOTIFICATION, true),
+            forwardingEnabled = prefs.getBoolean(KEY_FORWARDING_ENABLED, true)
         )
     }
 
@@ -49,6 +52,7 @@ object BridgePreferences {
             .putString(KEY_SERVICE_UUID, config.serviceUuid.trim())
             .putString(KEY_RX_UUID, config.rxUuid.trim())
             .putBoolean(KEY_ONGOING_NOTIFICATION, config.ongoingNotification)
+            .putBoolean(KEY_FORWARDING_ENABLED, config.forwardingEnabled)
             .apply()
     }
 

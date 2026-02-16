@@ -62,6 +62,33 @@ class MainActivity : AppCompatActivity() {
             saveSettingsFromUi()
         }
 
+        findViewById<Button>(R.id.btnSendDirectCommand).setOnClickListener {
+            val command = findViewById<EditText>(R.id.edtDirectCommand).text.toString()
+            sendDirectCommand(command)
+        }
+
+        findViewById<Button>(R.id.btnQueryMetrics).setOnClickListener {
+            sendDirectCommand("metrics")
+        }
+
+        findViewById<Button>(R.id.btnQueryStatus).setOnClickListener {
+            sendDirectCommand("status")
+        }
+
+        findViewById<Button>(R.id.btnStopBridge).setOnClickListener {
+            val current = BridgePreferences.loadConfig(this)
+            BridgePreferences.saveConfig(
+                this,
+                current.copy(
+                    forwardingEnabled = false,
+                    ongoingNotification = false
+                )
+            )
+            BridgeForegroundService.sync(this)
+            updateStatusText("Bridge stopped")
+            finishAffinity()
+        }
+
         findViewById<Button>(R.id.btnSelectDevice).setOnClickListener {
             showBondedDevicesPicker()
         }
@@ -96,6 +123,7 @@ class MainActivity : AppCompatActivity() {
         findViewById<EditText>(R.id.edtServiceUuid).setText(config.serviceUuid)
         findViewById<EditText>(R.id.edtRxUuid).setText(config.rxUuid)
         findViewById<Switch>(R.id.switchOngoingNotification).isChecked = config.ongoingNotification
+        findViewById<Switch>(R.id.switchForwardingEnabled).isChecked = config.forwardingEnabled
         renderState()
     }
 
@@ -105,11 +133,26 @@ class MainActivity : AppCompatActivity() {
             deviceAddress = findViewById<EditText>(R.id.edtDeviceAddress).text.toString(),
             serviceUuid = findViewById<EditText>(R.id.edtServiceUuid).text.toString(),
             rxUuid = findViewById<EditText>(R.id.edtRxUuid).text.toString(),
-            ongoingNotification = findViewById<Switch>(R.id.switchOngoingNotification).isChecked
+            ongoingNotification = findViewById<Switch>(R.id.switchOngoingNotification).isChecked,
+            forwardingEnabled = findViewById<Switch>(R.id.switchForwardingEnabled).isChecked
         )
         BridgePreferences.saveConfig(this, config)
         BridgeForegroundService.sync(this)
         updateStatusText("Settings saved")
+    }
+
+    private fun sendDirectCommand(command: String) {
+        BlePagerClient.sendCommand(this, command) { result ->
+            val statusLine = if (result.success) {
+                "Command ok: ${result.message}"
+            } else {
+                "Command failed: ${result.message}"
+            }
+            val responseLine = result.statusResponse?.let { "Status char: $it" } ?: ""
+            val extra = if (responseLine.isBlank()) statusLine else "$statusLine\n$responseLine"
+            BridgePreferences.appendLog(this, extra)
+            updateStatusText(extra)
+        }
     }
 
     private fun renderState() {
@@ -139,9 +182,11 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateStatusText(extra: String? = null) {
         val listenerEnabled = NotificationAccessState.isNotificationListenerEnabled(this)
-        val running = BridgePreferences.loadConfig(this).ongoingNotification
+        val config = BridgePreferences.loadConfig(this)
+        val running = config.ongoingNotification
+        val forwarding = config.forwardingEnabled
         val status = if (listenerEnabled) {
-            "Ready. Notification listener enabled. Background indicator: ${if (running) "ON" else "OFF"}."
+            "Ready. Listener enabled. Forwarding: ${if (forwarding) "ON" else "OFF"}. Background indicator: ${if (running) "ON" else "OFF"}."
         } else {
             "Action needed: Enable notification access for this app."
         }

@@ -9,6 +9,11 @@ import java.util.Locale
 class MessageNotificationListener : NotificationListenerService() {
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
+        val config = BridgePreferences.loadConfig(this)
+        if (!config.forwardingEnabled) {
+            return
+        }
+
         if (sbn.packageName != GOOGLE_MESSAGES_PACKAGE) {
             return
         }

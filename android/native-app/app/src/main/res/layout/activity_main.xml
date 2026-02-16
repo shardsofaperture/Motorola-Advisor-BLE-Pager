@@ -89,6 +89,13 @@
             android:hint="RX Characteristic UUID" />
 
         <Switch
+            android:id="@+id/switchForwardingEnabled"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Enable notification forwarding to pager" />
+
+        <Switch
             android:id="@+id/switchOngoingNotification"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -101,6 +108,34 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
             android:text="Save Settings" />
+
+        <EditText
+            android:id="@+id/edtDirectCommand"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:hint="Direct command (status, metrics, pm, txpower, ...)" />
+
+        <Button
+            android:id="@+id/btnSendDirectCommand"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Send Command to Pager" />
+
+        <Button
+            android:id="@+id/btnQueryMetrics"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Send metrics Command" />
+
+        <Button
+            android:id="@+id/btnQueryStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Send status Command" />
 
         <TextView
             android:layout_width="match_parent"
@@ -126,6 +161,13 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
             android:text="Clear Log" />
+
+        <Button
+            android:id="@+id/btnStopBridge"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="Stop Bridge and Exit" />
 
     </LinearLayout>
 </ScrollView>
