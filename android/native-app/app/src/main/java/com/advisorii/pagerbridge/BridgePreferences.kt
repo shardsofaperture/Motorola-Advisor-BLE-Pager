@@ -12,6 +12,8 @@ object BridgePreferences {
     private const val KEY_FORWARDING_ENABLED = "forwarding_enabled"
     private const val KEY_PASS_COUNT = "pass_count"
     private const val KEY_LOGS = "logs"
+    private const val KEY_LAST_TX_POWER_DBM = "last_tx_power_dbm"
+    private const val KEY_CUSTOM_TX_POWER = "custom_tx_power"
 
     private const val LOG_RETENTION_MS = 10_000L
     private const val MAX_LOG_ENTRIES = 80
@@ -102,6 +104,30 @@ object BridgePreferences {
             .edit()
             .remove(KEY_LOGS)
             .putInt(KEY_PASS_COUNT, 0)
+            .apply()
+    }
+
+    fun getLastTxPowerDbm(context: Context): Int {
+        return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).getInt(KEY_LAST_TX_POWER_DBM, 0)
+    }
+
+    fun setLastTxPowerDbm(context: Context, dbm: Int) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putInt(KEY_LAST_TX_POWER_DBM, dbm)
+            .apply()
+    }
+
+    fun getCustomTxPowerText(context: Context): String {
+        return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getString(KEY_CUSTOM_TX_POWER, "")
+            .orEmpty()
+    }
+
+    fun setCustomTxPowerText(context: Context, value: String) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_CUSTOM_TX_POWER, value.trim())
             .apply()
     }
 

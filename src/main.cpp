@@ -30,6 +30,7 @@ extern "C" {
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "nvs.h"
 #include "nvs_flash.h"
 
 namespace {
@@ -48,6 +49,9 @@ constexpr int kPmMaxFreqMhz = 80;
 constexpr int kPmMinFreqMhz = 40;
 constexpr bool kPmLightSleepEnable = false;
 constexpr esp_power_level_t kBleTxPowerDefault = ESP_PWR_LVL_N0;  // 0 dBm
+constexpr char kNvsNamespace[] = "pager_bridge";
+constexpr char kNvsKeyBleTxPowerDbm[] = "ble_tx_dbm";
+constexpr size_t kBleStatusMaxLen = 512;
 constexpr uint32_t kMetricsLogPeriodMs = 60000;
 constexpr uint32_t kCpuSamplePeriodMs = 1000;
 constexpr uint32_t kSyncWord = 0x7CD215D8;
@@ -139,15 +143,28 @@ static uint8_t gBleAddr[6] = {};
 static RuntimeMetrics gMetrics;
 static CpuMetrics gCpuMetrics;
 static portMUX_TYPE gMetricsMux = portMUX_INITIALIZER_UNLOCKED;
+static portMUX_TYPE gBleStatusMux = portMUX_INITIALIZER_UNLOCKED;
+static char gBleStatusResponse[kBleStatusMaxLen] = "READY";
 
-static void process_input_payload(const std::string& payload, InputSource source);
+static void process_input_payload(const std::string& payload, InputSource source, std::string* responseOut = nullptr);
 static int ble_gap_event(struct ble_gap_event* event, void* arg);
 static void start_ble_advertising(AdvProfile profile);
 static void log_ble_status();
 static void log_runtime_metrics(const char* reason);
 static void log_pm_locks();
 static void configure_ble_tx_power();
+static void append_response_line(std::string* responseOut, const std::string& line);
+static void set_ble_status_response(const std::string& response);
+static std::string format_status_summary();
+static std::string format_pm_status_summary();
+static std::string format_pm_locks_summary();
+static std::string format_metrics_summary();
+static std::string format_ble_summary();
+static std::string format_ble_tx_power_summary();
+static bool ble_tx_power_level_from_dbm(int dbm, esp_power_level_t* outLevel);
 static bool parse_ble_tx_power_dbm(const std::string& token, esp_power_level_t* outLevel);
+static bool load_ble_tx_power_target_from_nvs();
+static bool persist_ble_tx_power_target_to_nvs(esp_power_level_t level);
 static void log_ble_tx_power_status();
 
 static int ble_tx_power_dbm(esp_power_level_t level) {
@@ -172,23 +189,10 @@ static int ble_tx_power_dbm(esp_power_level_t level) {
   }
 }
 
-static bool parse_ble_tx_power_dbm(const std::string& token, esp_power_level_t* outLevel) {
+static bool ble_tx_power_level_from_dbm(int dbm, esp_power_level_t* outLevel) {
   if (outLevel == nullptr) {
     return false;
   }
-  if (token.empty()) {
-    return false;
-  }
-  char* end = nullptr;
-  errno = 0;
-  const long parsed = std::strtol(token.c_str(), &end, 10);
-  if (errno != 0 || end == token.c_str() || *end != '\0') {
-    return false;
-  }
-  if (parsed < -24 || parsed > 20) {
-    return false;
-  }
-  const int dbm = static_cast<int>(parsed);
   switch (dbm) {
     case -24: *outLevel = ESP_PWR_LVL_N24; return true;
     case -21: *outLevel = ESP_PWR_LVL_N21; return true;
@@ -210,11 +214,38 @@ static bool parse_ble_tx_power_dbm(const std::string& token, esp_power_level_t* 
   }
 }
 
-static void log_ble_tx_power_status() {
+static bool parse_ble_tx_power_dbm(const std::string& token, esp_power_level_t* outLevel) {
+  if (outLevel == nullptr) {
+    return false;
+  }
+  if (token.empty()) {
+    return false;
+  }
+  char* end = nullptr;
+  errno = 0;
+  const long parsed = std::strtol(token.c_str(), &end, 10);
+  if (errno != 0 || end == token.c_str() || *end != '\0') {
+    return false;
+  }
+  if (parsed < -24 || parsed > 20) {
+    return false;
+  }
+  return ble_tx_power_level_from_dbm(static_cast<int>(parsed), outLevel);
+}
+
+static std::string format_ble_tx_power_summary() {
   const esp_power_level_t advLevel = esp_ble_tx_power_get(ESP_BLE_PWR_TYPE_ADV);
   const esp_power_level_t defaultLevel = esp_ble_tx_power_get(ESP_BLE_PWR_TYPE_DEFAULT);
-  ESP_LOGI(kTag, "txpower: target=%ddBm adv=%ddBm default=%ddBm",
-           ble_tx_power_dbm(gBleTxPowerTarget), ble_tx_power_dbm(advLevel), ble_tx_power_dbm(defaultLevel));
+  char buffer[112] = {};
+  std::snprintf(buffer, sizeof(buffer), "txpower target=%ddBm adv=%ddBm default=%ddBm",
+                ble_tx_power_dbm(gBleTxPowerTarget),
+                ble_tx_power_dbm(advLevel),
+                ble_tx_power_dbm(defaultLevel));
+  return std::string(buffer);
+}
+
+static void log_ble_tx_power_status() {
+  ESP_LOGI(kTag, "%s", format_ble_tx_power_summary().c_str());
 }
 
 static void cpu_metrics_sample() {
@@ -521,6 +552,30 @@ static std::string to_lower_copy(std::string in) {
   return in;
 }
 
+static void append_response_line(std::string* responseOut, const std::string& line) {
+  if (responseOut == nullptr || line.empty()) {
+    return;
+  }
+  if (!responseOut->empty()) {
+    responseOut->append("\n");
+  }
+  responseOut->append(line);
+}
+
+static void set_ble_status_response(const std::string& response) {
+  std::string normalized = response;
+  if (normalized.empty()) {
+    normalized = "OK";
+  }
+  if (normalized.size() >= kBleStatusMaxLen) {
+    normalized.resize(kBleStatusMaxLen - 1);
+  }
+  portENTER_CRITICAL(&gBleStatusMux);
+  std::memset(gBleStatusResponse, 0, sizeof(gBleStatusResponse));
+  std::memcpy(gBleStatusResponse, normalized.c_str(), normalized.size());
+  portEXIT_CRITICAL(&gBleStatusMux);
+}
+
 static std::vector<uint8_t> build_pocsag_bits(const std::string& message, const Config& cfg) {
   std::vector<uint8_t> bits;
   bits.reserve(cfg.preambleBits + 544);
@@ -580,6 +635,20 @@ static void log_status() {
     ESP_LOGI(kTag, "status: ble mac=%02x:%02x:%02x:%02x:%02x:%02x",
              gBleAddr[5], gBleAddr[4], gBleAddr[3], gBleAddr[2], gBleAddr[1], gBleAddr[0]);
   }
+}
+
+static std::string format_status_summary() {
+  const UBaseType_t queued = gTxQueue == nullptr ? 0 : uxQueueMessagesWaiting(gTxQueue);
+  char buffer[224] = {};
+  std::snprintf(buffer, sizeof(buffer),
+                "status cap=%lu func=%u queue=%lu ble_conn=%s ble_adv=%s tx_target=%ddBm",
+                static_cast<unsigned long>(gConfig.capInd),
+                static_cast<unsigned>(gConfig.functionBits),
+                static_cast<unsigned long>(queued),
+                gBleConnHandle == BLE_HS_CONN_HANDLE_NONE ? "no" : "yes",
+                gBleAdvertising ? "yes" : "no",
+                ble_tx_power_dbm(gBleTxPowerTarget));
+  return std::string(buffer);
 }
 
 static void configure_power_management() {
@@ -646,6 +715,49 @@ static void log_pm_status() {
   }
 #else
   ESP_LOGI(kTag, "pm: disabled in sdkconfig");
+#endif
+}
+
+static std::string format_pm_status_summary() {
+#if CONFIG_PM_ENABLE
+  if (!gPmConfigureAttempted) {
+    char buffer[96] = {};
+    std::snprintf(buffer, sizeof(buffer), "pm pending arms_in=%lus",
+                  static_cast<unsigned long>(kPmArmDelayMs / 1000));
+    return std::string(buffer);
+  }
+  if (!gPmConfigured) {
+    char buffer[96] = {};
+    std::snprintf(buffer, sizeof(buffer), "pm configure_failed err=0x%x", gPmConfigureErr);
+    return std::string(buffer);
+  }
+  esp_pm_config_t pm = {};
+  const esp_err_t err = esp_pm_get_configuration(&pm);
+  if (err != ESP_OK) {
+    char buffer[96] = {};
+    std::snprintf(buffer, sizeof(buffer), "pm enabled config_unavailable err=0x%x", err);
+    return std::string(buffer);
+  }
+  char buffer[112] = {};
+  std::snprintf(buffer, sizeof(buffer), "pm enabled max=%dMHz min=%dMHz light_sleep=%s",
+                pm.max_freq_mhz, pm.min_freq_mhz, pm.light_sleep_enable ? "on" : "off");
+  return std::string(buffer);
+#else
+  return std::string("pm disabled");
+#endif
+}
+
+static std::string format_pm_locks_summary() {
+#if CONFIG_PM_ENABLE
+  if (!gPmConfigured) {
+    char buffer[112] = {};
+    std::snprintf(buffer, sizeof(buffer), "pm_locks pending (PM arms %lus after boot)",
+                  static_cast<unsigned long>(kPmArmDelayMs / 1000));
+    return std::string(buffer);
+  }
+  return std::string("pm_locks dumped_to_serial");
+#else
+  return std::string("pm_locks disabled");
 #endif
 }
 
@@ -750,6 +862,34 @@ static void log_runtime_metrics(const char* reason) {
 #endif
 }
 
+static std::string format_metrics_summary() {
+  const uint64_t now = static_cast<uint64_t>(esp_timer_get_time());
+  uint64_t uptimeUs = 0;
+  uint64_t connectedUs = 0;
+  uint64_t advertisingUs = 0;
+  CpuMetrics cpu = {};
+  portENTER_CRITICAL(&gMetricsMux);
+  uptimeUs = now - gMetrics.bootUs;
+  connectedUs = gMetrics.connectedUs + (gMetrics.connected ? (now - gMetrics.connStateSinceUs) : 0);
+  advertisingUs = gMetrics.advertisingUs + (gMetrics.advertising ? (now - gMetrics.advStateSinceUs) : 0);
+  cpu = gCpuMetrics;
+  portEXIT_CRITICAL(&gMetricsMux);
+
+  const float connectedPct = uptimeUs == 0 ? 0.0f : (100.0f * static_cast<float>(connectedUs) / static_cast<float>(uptimeUs));
+  const float advertisingPct =
+      uptimeUs == 0 ? 0.0f : (100.0f * static_cast<float>(advertisingUs) / static_cast<float>(uptimeUs));
+  const int currentMhz = esp_clk_cpu_freq() / 1000000;
+  char buffer[200] = {};
+  std::snprintf(buffer, sizeof(buffer),
+                "metrics up=%llus conn=%.1f%% adv=%.1f%% cpu=%dMHz samples=%llu",
+                static_cast<unsigned long long>(uptimeUs / 1000000ULL),
+                connectedPct,
+                advertisingPct,
+                currentMhz,
+                static_cast<unsigned long long>(cpu.samples));
+  return std::string(buffer);
+}
+
 static void pm_arm_task(void*) {
   vTaskDelay(pdMS_TO_TICKS(kPmArmDelayMs));
   configure_power_management();
@@ -790,29 +930,55 @@ static void log_ble_status() {
   ESP_LOGI(kTag, "ble: rx=%s status=%s", kRxUuidStr, kStatusUuidStr);
 }
 
-static bool handle_local_command(const std::string& raw) {
+static std::string format_ble_summary() {
+  const AdvProfileConfig advCfg = get_adv_profile_config(gAdvProfile);
+  char buffer[224] = {};
+  std::snprintf(buffer, sizeof(buffer),
+                "ble name=%s conn=%s adv=%s profile=%s interval=%.2f-%.2fs",
+                kBleDeviceName,
+                gBleConnHandle == BLE_HS_CONN_HANDLE_NONE ? "no" : "yes",
+                gBleAdvertising ? "yes" : "no",
+                advCfg.label,
+                advCfg.intervalMin * 0.000625f,
+                advCfg.intervalMax * 0.000625f);
+  std::string summary(buffer);
+  if (gBleAddrValid) {
+    char mac[40] = {};
+    std::snprintf(mac, sizeof(mac), " mac=%02x:%02x:%02x:%02x:%02x:%02x",
+                  gBleAddr[5], gBleAddr[4], gBleAddr[3], gBleAddr[2], gBleAddr[1], gBleAddr[0]);
+    summary += mac;
+  }
+  return summary;
+}
+
+static bool handle_local_command(const std::string& raw, std::string* responseOut = nullptr) {
   const std::string cmd = to_lower_copy(trim_copy(raw));
   if (cmd.empty()) {
     return true;
   }
   if (cmd == "status") {
     log_status();
+    append_response_line(responseOut, format_status_summary());
     return true;
   }
   if (cmd == "pm" || cmd == "pm status") {
     log_pm_status();
+    append_response_line(responseOut, format_pm_status_summary());
     return true;
   }
   if (cmd == "pm locks" || cmd == "pm lock") {
     log_pm_locks();
+    append_response_line(responseOut, format_pm_locks_summary());
     return true;
   }
   if (cmd == "metrics") {
     log_runtime_metrics("manual");
+    append_response_line(responseOut, format_metrics_summary());
     return true;
   }
   if (cmd == "txpower" || cmd == "tx power") {
     log_ble_tx_power_status();
+    append_response_line(responseOut, format_ble_tx_power_summary());
     return true;
   }
   if (cmd.rfind("txpower ", 0) == 0 || cmd.rfind("tx power ", 0) == 0) {
@@ -822,20 +988,28 @@ static bool handle_local_command(const std::string& raw) {
     esp_power_level_t level = ESP_PWR_LVL_INVALID;
     if (arg.empty() || !parse_ble_tx_power_dbm(arg, &level)) {
       ESP_LOGI(kTag, "Usage: txpower <dbm> where dbm is one of -24,-21,-18,-15,-12,-9,-6,-3,0,3,6,9,12,15,18,20");
+      append_response_line(responseOut,
+                           "usage: txpower <dbm> where dbm is -24,-21,-18,-15,-12,-9,-6,-3,0,3,6,9,12,15,18,20");
       return true;
     }
     gBleTxPowerTarget = level;
     configure_ble_tx_power();
+    const bool persisted = persist_ble_tx_power_target_to_nvs(level);
     log_ble_tx_power_status();
+    std::string txSummary = format_ble_tx_power_summary();
+    txSummary += persisted ? " persisted=yes" : " persisted=no";
+    append_response_line(responseOut, txSummary);
     return true;
   }
   if (cmd == "ble" || cmd == "ble status") {
     log_ble_status();
+    append_response_line(responseOut, format_ble_summary());
     return true;
   }
   if (cmd == "ble restart") {
     if (gBleConnHandle != BLE_HS_CONN_HANDLE_NONE) {
       ESP_LOGI(kTag, "ble: restart ignored while connected");
+      append_response_line(responseOut, "ble restart ignored while connected");
       return true;
     }
     const int stopRc = ble_gap_adv_stop();
@@ -844,37 +1018,58 @@ static bool handle_local_command(const std::string& raw) {
     }
     gBleAdvertising = false;
     start_ble_advertising(AdvProfile::kFastReconnect);
+    append_response_line(responseOut, "ble restart requested");
+    return true;
+  }
+  if (cmd == "report" || cmd == "diag" || cmd == "diagnostics") {
+    log_runtime_metrics("manual");
+    log_ble_tx_power_status();
+    log_ble_status();
+    log_pm_status();
+    log_pm_locks();
+    append_response_line(responseOut, format_metrics_summary());
+    append_response_line(responseOut, format_ble_tx_power_summary());
+    append_response_line(responseOut, format_ble_summary());
+    append_response_line(responseOut, format_pm_status_summary());
+    append_response_line(responseOut, format_pm_locks_summary());
     return true;
   }
   if (cmd == "help" || cmd == "?") {
-    ESP_LOGI(kTag, "Commands: status | pm | pm locks | metrics | txpower [<dbm>] | ble [status|restart] | ping | reboot | send <message> | help");
+    ESP_LOGI(kTag,
+             "Commands: status | pm | pm locks | metrics | txpower [<dbm>] | ble [status|restart] | report | ping | reboot | send <message> | help");
+    append_response_line(responseOut,
+                         "commands: status | pm | pm locks | metrics | txpower [<dbm>] | ble | report | ping | reboot | send <message>");
     return true;
   }
   if (cmd == "ping") {
     ESP_LOGI(kTag, "PONG");
+    append_response_line(responseOut, "PONG");
     return true;
   }
   if (cmd == "reboot" || cmd == "restart") {
     ESP_LOGW(kTag, "Reboot requested");
+    append_response_line(responseOut, "rebooting");
+    set_ble_status_response("rebooting");
     esp_restart();
     return true;
   }
   return false;
 }
 
-static void process_input_line(const std::string& rawLine, InputSource source) {
+static void process_input_line(const std::string& rawLine, InputSource source, std::string* responseOut = nullptr) {
   const std::string trimmed = trim_copy(rawLine);
   if (trimmed.empty()) {
     return;
   }
 
   const std::string lowered = to_lower_copy(trimmed);
-  if (handle_local_command(trimmed)) {
+  if (handle_local_command(trimmed, responseOut)) {
     return;
   }
 
   if (lowered == "send") {
     ESP_LOGI(kTag, "Usage: send <message>");
+    append_response_line(responseOut, "usage: send <message>");
     return;
   }
 
@@ -882,21 +1077,24 @@ static void process_input_line(const std::string& rawLine, InputSource source) {
     const std::string payload = trim_copy(trimmed.substr(4));
     if (payload.empty()) {
       ESP_LOGI(kTag, "Usage: send <message>");
+      append_response_line(responseOut, "usage: send <message>");
     } else {
       const TickType_t waitTicks = source == InputSource::kBle ? 0 : pdMS_TO_TICKS(200);
-      enqueue_message_page(payload, waitTicks);
+      const bool queued = enqueue_message_page(payload, waitTicks);
+      append_response_line(responseOut, queued ? "send queued" : "send queue busy");
     }
     return;
   }
 
   if (source == InputSource::kBle) {
     ESP_LOGW(kTag, "BLE unknown command: %s", trimmed.c_str());
+    append_response_line(responseOut, "unknown command");
   } else {
-    ESP_LOGI(kTag, "Unknown command. Use: send <message>, status, pm, pm locks, metrics, txpower, ble, ping, reboot, help");
+    ESP_LOGI(kTag, "Unknown command. Use: send <message>, status, pm, pm locks, metrics, txpower, ble, report, ping, reboot, help");
   }
 }
 
-static void process_input_payload(const std::string& payload, InputSource source) {
+static void process_input_payload(const std::string& payload, InputSource source, std::string* responseOut) {
   size_t start = 0;
   while (start <= payload.size()) {
     const size_t end = payload.find('\n', start);
@@ -905,7 +1103,7 @@ static void process_input_payload(const std::string& payload, InputSource source
     if (!line.empty() && line.back() == '\r') {
       line.pop_back();
     }
-    process_input_line(line, source);
+    process_input_line(line, source, responseOut);
     if (end == std::string::npos) {
       break;
     }
@@ -941,7 +1139,9 @@ static int ble_rx_access(uint16_t, uint16_t, ble_gatt_access_ctxt* ctxt, void*) 
     return BLE_ATT_ERR_UNLIKELY;
   }
 
-  process_input_payload(payload, InputSource::kBle);
+  std::string response;
+  process_input_payload(payload, InputSource::kBle, &response);
+  set_ble_status_response(response);
   return 0;
 }
 
@@ -950,8 +1150,12 @@ static int ble_status_access(uint16_t, uint16_t, ble_gatt_access_ctxt* ctxt, voi
     return BLE_ATT_ERR_UNLIKELY;
   }
 
-  constexpr char kStatus[] = "READY";
-  if (os_mbuf_append(ctxt->om, kStatus, sizeof(kStatus) - 1) != 0) {
+  char response[kBleStatusMaxLen] = {};
+  portENTER_CRITICAL(&gBleStatusMux);
+  std::memcpy(response, gBleStatusResponse, sizeof(response));
+  portEXIT_CRITICAL(&gBleStatusMux);
+  const size_t responseLen = strnlen(response, sizeof(response));
+  if (os_mbuf_append(ctxt->om, response, responseLen) != 0) {
     return BLE_ATT_ERR_INSUFFICIENT_RES;
   }
   return 0;
@@ -1024,6 +1228,63 @@ static void configure_ble_tx_power() {
   const int defaultDbm = ble_tx_power_dbm(esp_ble_tx_power_get(ESP_BLE_PWR_TYPE_DEFAULT));
   ESP_LOGI(kTag, "BLE tx power configured target=%ddBm adv=%ddBm default=%ddBm",
            ble_tx_power_dbm(gBleTxPowerTarget), advDbm, defaultDbm);
+}
+
+static bool load_ble_tx_power_target_from_nvs() {
+  nvs_handle_t nvs = 0;
+  esp_err_t err = nvs_open(kNvsNamespace, NVS_READONLY, &nvs);
+  if (err == ESP_ERR_NVS_NOT_FOUND) {
+    ESP_LOGI(kTag, "TX power NVS key missing; using default %ddBm", ble_tx_power_dbm(kBleTxPowerDefault));
+    return true;
+  }
+  if (err != ESP_OK) {
+    ESP_LOGW(kTag, "nvs_open(%s) failed: 0x%x", kNvsNamespace, err);
+    return false;
+  }
+
+  int32_t dbm = 0;
+  err = nvs_get_i32(nvs, kNvsKeyBleTxPowerDbm, &dbm);
+  nvs_close(nvs);
+  if (err == ESP_ERR_NVS_NOT_FOUND) {
+    ESP_LOGI(kTag, "TX power key unset; using default %ddBm", ble_tx_power_dbm(kBleTxPowerDefault));
+    return true;
+  }
+  if (err != ESP_OK) {
+    ESP_LOGW(kTag, "nvs_get_i32(%s) failed: 0x%x", kNvsKeyBleTxPowerDbm, err);
+    return false;
+  }
+
+  esp_power_level_t level = ESP_PWR_LVL_INVALID;
+  if (!ble_tx_power_level_from_dbm(static_cast<int>(dbm), &level)) {
+    ESP_LOGW(kTag, "Invalid persisted TX power %ld dBm; using default", static_cast<long>(dbm));
+    return false;
+  }
+  gBleTxPowerTarget = level;
+  ESP_LOGI(kTag, "Loaded TX power target from NVS: %ld dBm", static_cast<long>(dbm));
+  return true;
+}
+
+static bool persist_ble_tx_power_target_to_nvs(esp_power_level_t level) {
+  nvs_handle_t nvs = 0;
+  esp_err_t err = nvs_open(kNvsNamespace, NVS_READWRITE, &nvs);
+  if (err != ESP_OK) {
+    ESP_LOGW(kTag, "nvs_open(%s) for write failed: 0x%x", kNvsNamespace, err);
+    return false;
+  }
+
+  const int32_t dbm = static_cast<int32_t>(ble_tx_power_dbm(level));
+  err = nvs_set_i32(nvs, kNvsKeyBleTxPowerDbm, dbm);
+  if (err == ESP_OK) {
+    err = nvs_commit(nvs);
+  }
+  nvs_close(nvs);
+
+  if (err != ESP_OK) {
+    ESP_LOGW(kTag, "Persist TX power failed: 0x%x", err);
+    return false;
+  }
+  ESP_LOGI(kTag, "Persisted TX power target: %ld dBm", static_cast<long>(dbm));
+  return true;
 }
 
 static int ble_gap_event(struct ble_gap_event* event, void*) {
@@ -1138,6 +1399,7 @@ static bool init_ble() {
     ESP_LOGE(kTag, "nvs_flash_init failed: 0x%x", err);
     return false;
   }
+  load_ble_tx_power_target_from_nvs();
 
   err = nimble_port_init();
   if (err != ESP_OK) {

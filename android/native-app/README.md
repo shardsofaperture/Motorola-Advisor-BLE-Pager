@@ -11,6 +11,12 @@ Android app that forwards Google Messages notifications to the ESP32 BLE pager b
 4. Tracks total forwarded count.
 5. Uses short-lived log entries that auto-expire after about 10 seconds (not persisted).
 6. Uses optional ongoing foreground notification; tapping it opens `MainActivity`.
+7. Supports TX power controls:
+   - presets: `-6`, `-12`, `0`, `-3`
+   - custom value entry (validated to ESP32-supported levels)
+   - saves last selected TX power in app preferences
+   - sends `txpower <dbm>` command to firmware
+8. Supports diagnostics button that sends `report` to firmware and shows the status response.
 
 ## Build
 
@@ -18,6 +24,9 @@ Android app that forwards Google Messages notifications to the ESP32 BLE pager b
 cd android/native-app
 ./gradlew assembleDebug
 ```
+
+Wrapper note:
+- `./gradlew` now defaults `GRADLE_USER_HOME` to `$HOME/.gradle` instead of a project-local cache to avoid Kotlin DSL cache corruption issues.
 
 APK:
 - `app/build/outputs/apk/debug/app-debug.apk`
@@ -46,3 +55,4 @@ cd android/native-app
 ## Limitation
 
 - "Queued" in app logs means BLE connect/write flow was initiated; it is not a strict end-to-end pager ACK.
+- `pm locks` details are still a serial-side dump from firmware; BLE status returns a summary string for that command.

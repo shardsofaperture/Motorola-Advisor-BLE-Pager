@@ -109,6 +109,73 @@
             android:layout_marginTop="8dp"
             android:text="Save Settings" />
 
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="TX Power Control"
+            android:textStyle="bold" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/btnTxPowerMinus6"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="-6" />
+
+            <Button
+                android:id="@+id/btnTxPowerMinus12"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="6dp"
+                android:layout_weight="1"
+                android:text="-12" />
+
+            <Button
+                android:id="@+id/btnTxPower0"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="6dp"
+                android:layout_weight="1"
+                android:text="0" />
+
+            <Button
+                android:id="@+id/btnTxPowerMinus3"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="6dp"
+                android:layout_weight="1"
+                android:text="-3" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/txtTxPowerState"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Saved TX power: 0 dBm" />
+
+        <EditText
+            android:id="@+id/edtCustomTxPower"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:hint="Custom TX power dBm (-24 to 20)"
+            android:inputType="numberSigned" />
+
+        <Button
+            android:id="@+id/btnApplyCustomTxPower"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Save + Send Custom TX Power" />
+
         <EditText
             android:id="@+id/edtDirectCommand"
             android:layout_width="match_parent"
@@ -136,6 +203,13 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
             android:text="Send status Command" />
+
+        <Button
+            android:id="@+id/btnQueryDiagnostics"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Show Pager Diagnostics" />
 
         <TextView
             android:layout_width="match_parent"

@@ -23,8 +23,9 @@ if [[ -z "${ANDROID_HOME:-}" && -n "${ANDROID_SDK_ROOT:-}" ]]; then
   export ANDROID_HOME="$ANDROID_SDK_ROOT"
 fi
 
-# Keep Gradle caches writable from this repository context.
-export GRADLE_USER_HOME="${GRADLE_USER_HOME:-$SCRIPT_DIR/.gradle-user-home}"
+# Use the standard per-user Gradle cache by default.
+# Override with GRADLE_USER_HOME if a project-local cache is desired.
+export GRADLE_USER_HOME="${GRADLE_USER_HOME:-$HOME/.gradle}"
 
 # Provide local.properties for Android Gradle Plugin SDK discovery.
 if [[ ! -f "$SCRIPT_DIR/local.properties" && -n "${ANDROID_SDK_ROOT:-}" ]]; then

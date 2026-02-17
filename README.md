@@ -53,6 +53,7 @@ This repository now targets the original Motorola Advisor (Linguist use case).
 2. DFS configured to 40-80 MHz (`light_sleep` disabled)
 3. Fast reconnect advertising window (200-300 ms for 15s), then slow idle advertising (2.0-3.0s)
 - Runtime BLE TX power is adjustable with command (`txpower <dbm>`)
+- TX power target is persisted in NVS and restored on reboot
 
 ## Serial/BLE command interface
 
@@ -64,12 +65,17 @@ Commands accepted on serial monitor and BLE RX:
 - `pm locks`: active PM lock dump (debug power blockers)
 - `metrics`: uptime/connected/advertising/cpu frequency/load metrics
 - `txpower`: show current target + active BLE TX levels
-- `txpower <dbm>`: set TX power; allowed `-24,-21,-18,-15,-12,-9,-6,-3,0,3,6,9,12,15,18,20`
+- `txpower <dbm>`: set + persist TX power; allowed `-24,-21,-18,-15,-12,-9,-6,-3,0,3,6,9,12,15,18,20`
 - `ble`: BLE status (interval/profile/MAC/UUIDs/tx power)
 - `ble restart`: restart advertising if disconnected
+- `report` / `diag` / `diagnostics`: combined metrics + txpower + BLE + PM + PM locks summary
 - `ping`: response check
 - `reboot`: soft reboot
 - `help`: command summary
+
+Notes:
+- BLE status characteristic now returns the latest command response text (not just static `READY`)
+- `pm locks` still dumps lock details to serial; status response returns a summary string
 
 ## Build and flash firmware (PlatformIO)
 
@@ -101,6 +107,11 @@ What it does:
 4. Shows pass count in UI
 5. Keeps only short-lived logs (auto-expire after ~10 seconds, non-persistent)
 6. Foreground notification tap re-opens the app
+7. TX power controls:
+   - preset buttons `-6`, `-12`, `0`, `-3`
+   - custom TX power input (validated to supported ESP32 levels)
+   - saves last selected TX power locally and sends `txpower <dbm>` to pager
+8. Diagnostics button sends `report` and shows returned pager status summary
 
 ### Build APK
 
@@ -108,6 +119,9 @@ What it does:
 cd android/native-app
 ./gradlew assembleDebug
 ```
+
+Wrapper note:
+- `android/native-app/gradlew` defaults `GRADLE_USER_HOME` to `$HOME/.gradle` to avoid corrupted project-local cache issues.
 
 Output:
 - `android/native-app/app/build/outputs/apk/debug/app-debug.apk`

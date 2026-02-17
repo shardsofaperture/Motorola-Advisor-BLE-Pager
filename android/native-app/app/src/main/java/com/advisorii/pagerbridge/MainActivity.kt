@@ -18,6 +18,8 @@ import androidx.appcompat.app.AppCompatActivity
 
 class MainActivity : AppCompatActivity() {
     private val uiHandler = Handler(Looper.getMainLooper())
+    private val supportedTxPowerDbm = listOf(-24, -21, -18, -15, -12, -9, -6, -3, 0, 3, 6, 9, 12, 15, 18, 20)
+    private val supportedTxPowerDbmSet = supportedTxPowerDbm.toSet()
     private val logRefreshRunnable = object : Runnable {
         override fun run() {
             renderState()
@@ -62,6 +64,26 @@ class MainActivity : AppCompatActivity() {
             saveSettingsFromUi()
         }
 
+        findViewById<Button>(R.id.btnTxPowerMinus6).setOnClickListener {
+            applyTxPowerAndSend(-6)
+        }
+
+        findViewById<Button>(R.id.btnTxPowerMinus12).setOnClickListener {
+            applyTxPowerAndSend(-12)
+        }
+
+        findViewById<Button>(R.id.btnTxPower0).setOnClickListener {
+            applyTxPowerAndSend(0)
+        }
+
+        findViewById<Button>(R.id.btnTxPowerMinus3).setOnClickListener {
+            applyTxPowerAndSend(-3)
+        }
+
+        findViewById<Button>(R.id.btnApplyCustomTxPower).setOnClickListener {
+            applyCustomTxPowerAndSend()
+        }
+
         findViewById<Button>(R.id.btnSendDirectCommand).setOnClickListener {
             val command = findViewById<EditText>(R.id.edtDirectCommand).text.toString()
             sendDirectCommand(command)
@@ -73,6 +95,10 @@ class MainActivity : AppCompatActivity() {
 
         findViewById<Button>(R.id.btnQueryStatus).setOnClickListener {
             sendDirectCommand("status")
+        }
+
+        findViewById<Button>(R.id.btnQueryDiagnostics).setOnClickListener {
+            sendDirectCommand("report")
         }
 
         findViewById<Button>(R.id.btnStopBridge).setOnClickListener {
@@ -122,8 +148,10 @@ class MainActivity : AppCompatActivity() {
         findViewById<EditText>(R.id.edtDeviceAddress).setText(config.deviceAddress)
         findViewById<EditText>(R.id.edtServiceUuid).setText(config.serviceUuid)
         findViewById<EditText>(R.id.edtRxUuid).setText(config.rxUuid)
+        findViewById<EditText>(R.id.edtCustomTxPower).setText(BridgePreferences.getCustomTxPowerText(this))
         findViewById<Switch>(R.id.switchOngoingNotification).isChecked = config.ongoingNotification
         findViewById<Switch>(R.id.switchForwardingEnabled).isChecked = config.forwardingEnabled
+        renderTxPowerState()
         renderState()
     }
 
@@ -153,6 +181,42 @@ class MainActivity : AppCompatActivity() {
             BridgePreferences.appendLog(this, extra)
             updateStatusText(extra)
         }
+    }
+
+    private fun applyCustomTxPowerAndSend() {
+        val raw = findViewById<EditText>(R.id.edtCustomTxPower).text.toString().trim()
+        if (raw.isBlank()) {
+            updateStatusText("Custom TX power is empty")
+            return
+        }
+        val dbm = raw.toIntOrNull()
+        if (dbm == null) {
+            updateStatusText("Custom TX power must be a whole number")
+            return
+        }
+        if (!supportedTxPowerDbmSet.contains(dbm)) {
+            updateStatusText("Unsupported TX power $dbm dBm. Use: ${supportedTxPowerDbm.joinToString(", ")}")
+            return
+        }
+        BridgePreferences.setCustomTxPowerText(this, raw)
+        applyTxPowerAndSend(dbm)
+    }
+
+    private fun applyTxPowerAndSend(dbm: Int) {
+        if (!supportedTxPowerDbmSet.contains(dbm)) {
+            updateStatusText("Unsupported TX power $dbm dBm")
+            return
+        }
+        BridgePreferences.setLastTxPowerDbm(this, dbm)
+        BridgePreferences.setCustomTxPowerText(this, dbm.toString())
+        findViewById<EditText>(R.id.edtCustomTxPower).setText(dbm.toString())
+        renderTxPowerState()
+        sendDirectCommand("txpower $dbm")
+    }
+
+    private fun renderTxPowerState() {
+        val last = BridgePreferences.getLastTxPowerDbm(this)
+        findViewById<TextView>(R.id.txtTxPowerState).text = "Saved TX power: $last dBm"
     }
 
     private fun renderState() {
