@@ -57,7 +57,9 @@ constexpr uint32_t kCpuSamplePeriodMs = 1000;
 constexpr uint32_t kSyncWord = 0x7CD215D8;
 constexpr uint32_t kIdleWord = 0x7A89C197;
 constexpr uint32_t kMaxRmtDuration = 32767;
-constexpr size_t kMaxRmtItems = 2000;
+constexpr size_t kMaxRmtItems = 8192;
+constexpr size_t kPagerMessageMaxChars = 200;
+constexpr size_t kBleRxAssembleMaxLen = 768;
 constexpr uint16_t kAdvFastIntervalMin = 0x0140;  // 200 ms
 constexpr uint16_t kAdvFastIntervalMax = 0x01E0;  // 300 ms
 constexpr int32_t kAdvFastDurationMs = 15000;
@@ -145,6 +147,7 @@ static CpuMetrics gCpuMetrics;
 static portMUX_TYPE gMetricsMux = portMUX_INITIALIZER_UNLOCKED;
 static portMUX_TYPE gBleStatusMux = portMUX_INITIALIZER_UNLOCKED;
 static char gBleStatusResponse[kBleStatusMaxLen] = "READY";
+static std::string gBleRxAssembleBuffer;
 
 static void process_input_payload(const std::string& payload, InputSource source, std::string* responseOut = nullptr);
 static int ble_gap_event(struct ble_gap_event* event, void* arg);
@@ -464,19 +467,38 @@ class WaveTx {
 
 class PocsagEncoder {
  public:
-  std::vector<uint32_t> build_batch_words(uint32_t capcode, uint8_t functionBits,
-                                          const std::string& message) const {
-    std::vector<uint32_t> words(16, kIdleWord);
-    const uint8_t frame = static_cast<uint8_t>(capcode & 0x7);
-    size_t index = static_cast<size_t>(frame) * 2;
-    words[index++] = build_address_word(capcode, functionBits);
+  std::vector<uint32_t> build_codewords(uint32_t capcode, uint8_t functionBits,
+                                        const std::string& message) const {
+    const std::vector<uint32_t> messageWords = build_alpha_words(message);
+    const size_t addressSlot = static_cast<size_t>(capcode & 0x7U) * 2U;
+    std::vector<uint32_t> words;
+    size_t messageIndex = 0;
+    bool addressPlaced = false;
 
-    for (const uint32_t messageWord : build_alpha_words(message)) {
-      if (index >= words.size()) {
+    while (true) {
+      for (size_t slot = 0; slot < 16; ++slot) {
+        if (!addressPlaced) {
+          if (slot == addressSlot) {
+            words.push_back(build_address_word(capcode, functionBits));
+            addressPlaced = true;
+          } else {
+            words.push_back(kIdleWord);
+          }
+          continue;
+        }
+
+        if (messageIndex < messageWords.size()) {
+          words.push_back(messageWords[messageIndex++]);
+        } else {
+          words.push_back(kIdleWord);
+        }
+      }
+
+      if (addressPlaced && messageIndex >= messageWords.size()) {
         break;
       }
-      words[index++] = messageWord;
     }
+
     return words;
   }
 
@@ -577,8 +599,11 @@ static void set_ble_status_response(const std::string& response) {
 }
 
 static std::vector<uint8_t> build_pocsag_bits(const std::string& message, const Config& cfg) {
+  const std::vector<uint32_t> words = gEncoder.build_codewords(cfg.capInd, cfg.functionBits, message);
+
   std::vector<uint8_t> bits;
-  bits.reserve(cfg.preambleBits + 544);
+  const size_t syncWords = 1U + (words.empty() ? 0U : ((words.size() - 1U) / 16U));
+  bits.reserve(cfg.preambleBits + (words.size() * 32U) + (syncWords * 32U));
 
   for (uint32_t i = 0; i < cfg.preambleBits; ++i) {
     bits.push_back(static_cast<uint8_t>(i % 2 == 0));
@@ -589,8 +614,14 @@ static std::vector<uint8_t> build_pocsag_bits(const std::string& message, const 
     bits.push_back((sync >> i) & 0x1);
   }
 
-  auto words = gEncoder.build_batch_words(cfg.capInd, cfg.functionBits, message);
-  for (uint32_t& word : words) {
+  for (size_t index = 0; index < words.size(); ++index) {
+    if (index > 0 && (index % 16U) == 0U) {
+      uint32_t batchSync = cfg.invertWords ? ~kSyncWord : kSyncWord;
+      for (int i = 31; i >= 0; --i) {
+        bits.push_back((batchSync >> i) & 0x1);
+      }
+    }
+    uint32_t word = words[index];
     if (cfg.invertWords) {
       word = ~word;
     }
@@ -951,7 +982,8 @@ static std::string format_ble_summary() {
   return summary;
 }
 
-static bool handle_local_command(const std::string& raw, std::string* responseOut = nullptr) {
+static bool handle_local_command(const std::string& raw, InputSource source,
+                                 std::string* responseOut = nullptr) {
   const std::string cmd = to_lower_copy(trim_copy(raw));
   if (cmd.empty()) {
     return true;
@@ -967,12 +999,16 @@ static bool handle_local_command(const std::string& raw, std::string* responseOu
     return true;
   }
   if (cmd == "pm locks" || cmd == "pm lock") {
-    log_pm_locks();
+    if (source != InputSource::kBle) {
+      log_pm_locks();
+    }
     append_response_line(responseOut, format_pm_locks_summary());
     return true;
   }
   if (cmd == "metrics") {
-    log_runtime_metrics("manual");
+    if (source != InputSource::kBle) {
+      log_runtime_metrics("manual");
+    }
     append_response_line(responseOut, format_metrics_summary());
     return true;
   }
@@ -1022,11 +1058,13 @@ static bool handle_local_command(const std::string& raw, std::string* responseOu
     return true;
   }
   if (cmd == "report" || cmd == "diag" || cmd == "diagnostics") {
-    log_runtime_metrics("manual");
-    log_ble_tx_power_status();
-    log_ble_status();
-    log_pm_status();
-    log_pm_locks();
+    if (source != InputSource::kBle) {
+      log_runtime_metrics("manual");
+      log_ble_tx_power_status();
+      log_ble_status();
+      log_pm_status();
+      log_pm_locks();
+    }
     append_response_line(responseOut, format_metrics_summary());
     append_response_line(responseOut, format_ble_tx_power_summary());
     append_response_line(responseOut, format_ble_summary());
@@ -1063,7 +1101,7 @@ static void process_input_line(const std::string& rawLine, InputSource source, s
   }
 
   const std::string lowered = to_lower_copy(trimmed);
-  if (handle_local_command(trimmed, responseOut)) {
+  if (handle_local_command(trimmed, source, responseOut)) {
     return;
   }
 
@@ -1074,11 +1112,21 @@ static void process_input_line(const std::string& rawLine, InputSource source, s
   }
 
   if (lowered.rfind("send ", 0) == 0) {
-    const std::string payload = trim_copy(trimmed.substr(4));
+    std::string payload = trim_copy(trimmed.substr(4));
     if (payload.empty()) {
       ESP_LOGI(kTag, "Usage: send <message>");
       append_response_line(responseOut, "usage: send <message>");
     } else {
+      const size_t originalLen = payload.size();
+      if (payload.size() > kPagerMessageMaxChars) {
+        payload.resize(kPagerMessageMaxChars);
+        char truncationLine[80] = {};
+        std::snprintf(truncationLine, sizeof(truncationLine),
+                      "send truncated from=%lu to=%lu",
+                      static_cast<unsigned long>(originalLen),
+                      static_cast<unsigned long>(payload.size()));
+        append_response_line(responseOut, truncationLine);
+      }
       const TickType_t waitTicks = source == InputSource::kBle ? 0 : pdMS_TO_TICKS(200);
       const bool queued = enqueue_message_page(payload, waitTicks);
       append_response_line(responseOut, queued ? "send queued" : "send queue busy");
@@ -1140,7 +1188,48 @@ static int ble_rx_access(uint16_t, uint16_t, ble_gatt_access_ctxt* ctxt, void*) 
   }
 
   std::string response;
-  process_input_payload(payload, InputSource::kBle, &response);
+  if (gBleConnHandle != BLE_HS_CONN_HANDLE_NONE) {
+    char connectedLine[48] = {};
+    std::snprintf(connectedLine, sizeof(connectedLine), "connected yes handle=%u",
+                  static_cast<unsigned>(gBleConnHandle));
+    append_response_line(&response, connectedLine);
+  } else {
+    append_response_line(&response, "connected no");
+  }
+
+  if ((gBleRxAssembleBuffer.size() + payload.size()) > kBleRxAssembleMaxLen) {
+    gBleRxAssembleBuffer.clear();
+    char overflowLine[96] = {};
+    std::snprintf(overflowLine, sizeof(overflowLine),
+                  "rx overflow dropped max=%lu",
+                  static_cast<unsigned long>(kBleRxAssembleMaxLen));
+    append_response_line(&response, overflowLine);
+    set_ble_status_response(response);
+    return 0;
+  }
+
+  gBleRxAssembleBuffer.append(payload);
+  const size_t lastNewline = gBleRxAssembleBuffer.find_last_of('\n');
+  if (lastNewline == std::string::npos) {
+    char partialLine[96] = {};
+    std::snprintf(partialLine, sizeof(partialLine),
+                  "rx partial len=%lu waiting_newline",
+                  static_cast<unsigned long>(gBleRxAssembleBuffer.size()));
+    append_response_line(&response, partialLine);
+    set_ble_status_response(response);
+    return 0;
+  }
+
+  const std::string complete = gBleRxAssembleBuffer.substr(0, lastNewline + 1);
+  gBleRxAssembleBuffer.erase(0, lastNewline + 1);
+  process_input_payload(complete, InputSource::kBle, &response);
+  if (!gBleRxAssembleBuffer.empty()) {
+    char partialLine[96] = {};
+    std::snprintf(partialLine, sizeof(partialLine),
+                  "rx partial len=%lu waiting_newline",
+                  static_cast<unsigned long>(gBleRxAssembleBuffer.size()));
+    append_response_line(&response, partialLine);
+  }
   set_ble_status_response(response);
   return 0;
 }
@@ -1292,21 +1381,30 @@ static int ble_gap_event(struct ble_gap_event* event, void*) {
     case BLE_GAP_EVENT_CONNECT:
       if (event->connect.status == 0) {
         gBleConnHandle = event->connect.conn_handle;
+        gBleRxAssembleBuffer.clear();
         gBleAdvertising = false;
         metrics_set_connected(true);
         metrics_set_advertising(false);
         ESP_LOGI(kTag, "BLE connected; handle=%u", static_cast<unsigned>(gBleConnHandle));
+        char connectedLine[48] = {};
+        std::snprintf(connectedLine, sizeof(connectedLine), "connected yes handle=%u",
+                      static_cast<unsigned>(gBleConnHandle));
+        set_ble_status_response(connectedLine);
       } else {
         gBleConnHandle = BLE_HS_CONN_HANDLE_NONE;
+        gBleRxAssembleBuffer.clear();
         metrics_set_connected(false);
         ESP_LOGW(kTag, "BLE connect failed; status=%d", event->connect.status);
+        set_ble_status_response("connected no");
         start_ble_advertising(AdvProfile::kFastReconnect);
       }
       return 0;
     case BLE_GAP_EVENT_DISCONNECT:
       ESP_LOGI(kTag, "BLE disconnected; reason=%d", event->disconnect.reason);
       gBleConnHandle = BLE_HS_CONN_HANDLE_NONE;
+      gBleRxAssembleBuffer.clear();
       metrics_set_connected(false);
+      set_ble_status_response("connected no");
       start_ble_advertising(AdvProfile::kFastReconnect);
       return 0;
     case BLE_GAP_EVENT_ADV_COMPLETE:

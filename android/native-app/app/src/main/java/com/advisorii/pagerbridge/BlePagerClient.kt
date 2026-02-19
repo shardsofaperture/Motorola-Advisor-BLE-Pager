@@ -20,6 +20,11 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.UUID
 
 object BlePagerClient {
+    private const val DEFAULT_MTU = 23
+    private const val DESIRED_MTU = 247
+    private const val MAX_CONNECT_ATTEMPTS = 3
+    private const val CONNECT_RETRY_DELAY_MS = 350L
+
     data class CommandResult(
         val success: Boolean,
         val message: String,
@@ -30,7 +35,20 @@ object BlePagerClient {
     private var activeGatt: BluetoothGatt? = null
 
     fun sendToPager(context: Context, payload: String): Boolean {
-        return startTransaction(context, payload, expectStatusRead = false, onResult = null)
+        return startTransaction(context, ensureTrailingNewline(payload), expectStatusRead = false, onResult = null)
+    }
+
+    fun sendToPager(context: Context, payload: String, onResult: (CommandResult) -> Unit): Boolean {
+        val started = startTransaction(
+            context,
+            ensureTrailingNewline(payload),
+            expectStatusRead = true,
+            onResult = onResult
+        )
+        if (!started) {
+            onResult(CommandResult(success = false, message = "Failed to start BLE pager transaction"))
+        }
+        return started
     }
 
     fun sendCommand(context: Context, command: String, onResult: (CommandResult) -> Unit) {
@@ -98,7 +116,8 @@ object BlePagerClient {
         rxUuid: UUID,
         statusUuid: UUID?,
         payload: String,
-        onResult: ((CommandResult) -> Unit)?
+        onResult: ((CommandResult) -> Unit)?,
+        attempt: Int = 1
     ) {
         activeGatt?.close()
         activeGatt = null
@@ -113,28 +132,121 @@ object BlePagerClient {
             }
         }
 
-        val gatt = device.connectGatt(context, false, object : BluetoothGattCallback() {
+        val callback = object : BluetoothGattCallback() {
+            var negotiatedMtu: Int = DEFAULT_MTU
+            var rxCharacteristic: BluetoothGattCharacteristic? = null
+            var payloadChunks: List<ByteArray> = emptyList()
+            var nextChunkIndex: Int = 0
+            var ignoreFurtherCallbacks: Boolean = false
+
+            fun splitPayloadForWrite(payloadBytes: ByteArray, mtu: Int): List<ByteArray> {
+                val chunkSize = (mtu - 3).coerceAtLeast(20)
+                if (payloadBytes.isEmpty()) return listOf(ByteArray(0))
+                val chunks = ArrayList<ByteArray>((payloadBytes.size + chunkSize - 1) / chunkSize)
+                var offset = 0
+                while (offset < payloadBytes.size) {
+                    val end = minOf(offset + chunkSize, payloadBytes.size)
+                    chunks.add(payloadBytes.copyOfRange(offset, end))
+                    offset = end
+                }
+                return chunks
+            }
+
+            fun enqueueNextWrite(g: BluetoothGatt): Boolean {
+                val characteristic = rxCharacteristic ?: return false
+                if (nextChunkIndex >= payloadChunks.size) return false
+                val chunk = payloadChunks[nextChunkIndex]
+                characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                val queued = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    g.writeCharacteristic(
+                        characteristic,
+                        chunk,
+                        BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                    ) == BluetoothGatt.GATT_SUCCESS
+                } else {
+                    characteristic.value = chunk
+                    @Suppress("DEPRECATION")
+                    g.writeCharacteristic(characteristic)
+                }
+                if (queued) {
+                    nextChunkIndex += 1
+                }
+                return queued
+            }
+
             override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
+                if (ignoreFurtherCallbacks) {
+                    return
+                }
                 if (status != BluetoothGatt.GATT_SUCCESS) {
-                    complete(CommandResult(success = false, message = "Connect failed: $status"))
+                    val statusLabel = describeGattStatus(status)
+                    val canRetry = isRetriableConnectFailure(status) && attempt < MAX_CONNECT_ATTEMPTS
+                    if (canRetry) {
+                        ignoreFurtherCallbacks = true
+                        g.close()
+                        if (activeGatt == g) activeGatt = null
+                        val nextAttempt = attempt + 1
+                        val delayMs = CONNECT_RETRY_DELAY_MS * attempt
+                        mainHandler.postDelayed({
+                            connectAndWrite(
+                                context = context,
+                                device = device,
+                                serviceUuid = serviceUuid,
+                                rxUuid = rxUuid,
+                                statusUuid = statusUuid,
+                                payload = payload,
+                                onResult = onResult,
+                                attempt = nextAttempt
+                            )
+                        }, delayMs)
+                        return
+                    }
+                    complete(
+                        CommandResult(
+                            success = false,
+                            message = "Connect failed: $status ($statusLabel), attempt $attempt/$MAX_CONNECT_ATTEMPTS"
+                        )
+                    )
+                    ignoreFurtherCallbacks = true
                     g.close()
                     if (activeGatt == g) activeGatt = null
                     return
                 }
                 if (newState == BluetoothProfile.STATE_CONNECTED) {
-                    g.discoverServices()
+                    val requested = g.requestMtu(DESIRED_MTU)
+                    if (!requested) {
+                        g.discoverServices()
+                    }
                 } else {
                     if (!finished.get()) {
-                        complete(CommandResult(success = false, message = "Disconnected before completion"))
+                        complete(
+                            CommandResult(
+                                success = false,
+                                message = "Disconnected before completion, attempt $attempt/$MAX_CONNECT_ATTEMPTS"
+                            )
+                        )
                     }
+                    ignoreFurtherCallbacks = true
                     g.close()
                     if (activeGatt == g) activeGatt = null
                 }
             }
 
+            override fun onMtuChanged(g: BluetoothGatt, mtu: Int, status: Int) {
+                if (status == BluetoothGatt.GATT_SUCCESS && mtu > 0) {
+                    negotiatedMtu = mtu
+                }
+                g.discoverServices()
+            }
+
             override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
                 if (status != BluetoothGatt.GATT_SUCCESS) {
-                    complete(CommandResult(success = false, message = "Service discovery failed: $status"))
+                    complete(
+                        CommandResult(
+                            success = false,
+                            message = "Service discovery failed: $status (${describeGattStatus(status)})"
+                        )
+                    )
                     g.disconnect()
                     return
                 }
@@ -149,25 +261,12 @@ object BlePagerClient {
                     return
                 }
 
-                val bytes = payload.toByteArray()
-                characteristic.value = bytes
-                characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    val queued = g.writeCharacteristic(
-                        characteristic,
-                        bytes,
-                        BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-                    )
-                    if (queued != BluetoothGatt.GATT_SUCCESS) {
-                        complete(CommandResult(success = false, message = "Write enqueue failed: $queued"))
-                        g.disconnect()
-                    }
-                } else {
-                    @Suppress("DEPRECATION")
-                    if (!g.writeCharacteristic(characteristic)) {
-                        complete(CommandResult(success = false, message = "Write enqueue failed"))
-                        g.disconnect()
-                    }
+                rxCharacteristic = characteristic
+                payloadChunks = splitPayloadForWrite(payload.toByteArray(), negotiatedMtu)
+                nextChunkIndex = 0
+                if (!enqueueNextWrite(g)) {
+                    complete(CommandResult(success = false, message = "Write enqueue failed"))
+                    g.disconnect()
                 }
             }
 
@@ -177,13 +276,26 @@ object BlePagerClient {
                 status: Int
             ) {
                 if (status != BluetoothGatt.GATT_SUCCESS) {
-                    complete(CommandResult(success = false, message = "Write failed: $status"))
+                    complete(
+                        CommandResult(
+                            success = false,
+                            message = "Write failed: $status (${describeGattStatus(status)})"
+                        )
+                    )
                     g.disconnect()
                     return
                 }
 
+                if (nextChunkIndex < payloadChunks.size) {
+                    if (!enqueueNextWrite(g)) {
+                        complete(CommandResult(success = false, message = "Write enqueue failed during chunking"))
+                        g.disconnect()
+                    }
+                    return
+                }
+
                 if (statusUuid == null) {
-                    complete(CommandResult(success = true, message = "Command written"))
+                    complete(CommandResult(success = true, message = "Command written (${payloadChunks.size} chunk(s))"))
                     g.disconnect()
                     return
                 }
@@ -235,16 +347,37 @@ object BlePagerClient {
                 value: ByteArray
             ) {
                 if (status != BluetoothGatt.GATT_SUCCESS) {
-                    complete(CommandResult(success = false, message = "Status read failed: $status"))
+                    complete(
+                        CommandResult(
+                            success = false,
+                            message = "Status read failed: $status (${describeGattStatus(status)})"
+                        )
+                    )
                     g.disconnect()
                     return
                 }
                 val response = value.toString(Charsets.UTF_8).ifBlank { "<empty>" }
-                complete(CommandResult(success = true, message = "Command written + status read", statusResponse = response))
+                complete(
+                    CommandResult(
+                        success = true,
+                        message = "Command written + status read (${payloadChunks.size} chunk(s))",
+                        statusResponse = response
+                    )
+                )
                 g.disconnect()
             }
-        })
+        }
+        val gatt = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            device.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE)
+        } else {
+            device.connectGatt(context, false, callback)
+        }
         activeGatt = gatt
+    }
+
+    private fun ensureTrailingNewline(payload: String): String {
+        val trimmed = payload.trimEnd('\r')
+        return if (trimmed.endsWith("\n")) trimmed else "$trimmed\n"
     }
 
     private fun hasBluetoothPermission(context: Context): Boolean {
@@ -255,5 +388,20 @@ object BlePagerClient {
             context,
             Manifest.permission.BLUETOOTH_CONNECT
         ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun isRetriableConnectFailure(status: Int): Boolean {
+        return status == 8 || status == 62 || status == 133 || status == 147
+    }
+
+    private fun describeGattStatus(status: Int): String {
+        return when (status) {
+            BluetoothGatt.GATT_SUCCESS -> "GATT_SUCCESS"
+            8 -> "GATT_CONN_TIMEOUT"
+            62 -> "GATT_CONN_FAIL_ESTABLISH"
+            133 -> "GATT_ERROR"
+            147 -> "GATT_STATUS_147"
+            else -> "GATT_STATUS_$status"
+        }
     }
 }
